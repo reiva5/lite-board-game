@@ -1,0 +1,15 @@
+{
+  "name": "@reiva5/spreadsheet-state",
+  "version": "0.1.0",
+  "description": "Reusable spreadsheet operations and JSON state persistence for JavaScript.",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": ["src", "README.md"],
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/index.js && node --check src/spreadsheet.js && node --check src/google-sheets.js && node --check src/state-store.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
