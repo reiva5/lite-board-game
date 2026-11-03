@@ -29,6 +29,27 @@ function fixture() {
 }
 const code = expected => error => error.code === expected;
 
+test('phase guard skips lobby cleanup if an injected clock corrupts the validated phase', () => {
+  const f = fixture();
+  f.join('A');
+  const before = structuredClone(f.state);
+  const parse = JSON.parse;
+  let working;
+  // Capture the real clone to inject a dependency fault after initial validation.
+  JSON.parse = (...args) => { working = parse(...args); return working; };
+  try {
+    assert.throws(() => applyCommand(before, f.command('initialize'), {
+      ...f.deps,
+      now: () => { working.phase = 'unsupported'; return LOBBY_TIMEOUT; },
+    }), code('CORRUPT_STATE'));
+    assert.deepEqual(working.players, before.players);
+    assert.equal(working.revision, before.revision);
+    assert.deepEqual(f.state, before);
+  } finally {
+    JSON.parse = parse;
+  }
+});
+
 test('ready is explicit boolean, private state validates, and all-ready stays lobby', () => {
   const f = fixture(), a = f.join('A'), b = f.join('B');
   f.ready(a, true); f.ready(b, true);

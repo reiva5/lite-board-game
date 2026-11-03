@@ -127,7 +127,7 @@ file JavaScript ke suite pengujian ada di
 Integrasi dengan akun Google sungguhan memerlukan token dan spreadsheet uji
 sendiri; tidak disertakan atau diasumsikan tersedia.
 
-## Aplikasi Kartu 100 (registrasi)
+## Aplikasi Kartu 100 (registrasi dan lobby)
 
 Selain library yang API-nya tetap sama, repo ini menyediakan frontend statis
 `web/` untuk GitHub Pages dan backend standalone Google Apps Script di
@@ -136,4 +136,6 @@ sharing spreadsheet, build/deploy, kontrak API untuk layer lobby, batas keamanan
 dan prasyarat smoke test live ada di
 [dokumentasi registrasi](https://github.com/reiva5/lite-board-game/blob/main/docs/registration.md).
 Deployment Google dan Pages **belum diverifikasi live**; lihat blocker di dokumen
-tersebut. Layer ini tidak mengimplementasikan ready, timeout, atau game.
+tersebut. [Dokumentasi lobby](./docs/lobby.md) menjelaskan ready/not-ready,
+heartbeat/sync sequential dan timeout lobby 60 detik. Semua siap tetap di
+lobby; auto-start, game placeholder dan aturan kartu belum diimplementasikan.
