@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Kartu 100 - Lobby</title>
+  <title>Kartu 100 - Lobby dan game</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.js"></script>
 </head>
 <body>
   <main>
-    <header><p class="eyebrow">KARTU 100 / TAHAP 2</p><h1>Satu spreadsheet, satu server.</h1>
+    <header><p class="eyebrow">KARTU 100 / TAHAP 3</p><h1>Satu spreadsheet, satu server.</h1>
       <p>Lobby untuk 2-4 pemain. Tidak perlu login Google untuk bermain.</p></header>
     <section aria-labelledby="entry-title">
       <h2 id="entry-title">Masuk server</h2>
@@ -33,14 +33,22 @@
     </section>
     <section id="roster" aria-labelledby="roster-title" hidden>
       <h2 id="roster-title">Pemain terdaftar</h2><p id="server"></p><ul id="players"></ul>
-      <p class="hint">Sinkronisasi sekaligus heartbeat sekitar setiap 10 detik. Tanpa heartbeat selama 60 detik,
+      <p id="lobby-help" class="hint">Sinkronisasi sekaligus heartbeat sekitar setiap 10 detik. Tanpa heartbeat selama 60 detik di lobby,
         pemain dikeluarkan dan semua pemain tersisa menjadi belum siap saat request berikutnya.
-        Tab latar belakang dapat ditunda browser. Semua siap belum memulai permainan pada tahap ini.</p>
+        Tab latar belakang dapat ditunda browser. Permainan otomatis dimulai saat 2-4 pemain semuanya siap.</p>
       <div class="actions">
         <button id="ready" type="button" hidden>Siap</button>
         <button id="not-ready" type="button" class="secondary" hidden>Belum siap</button>
         <button id="leave" type="button" class="secondary" hidden>Keluar server</button>
       </div>
+      <section id="game" aria-labelledby="game-title" hidden>
+        <h2 id="game-title">Permainan dimulai - placeholder tersinkron</h2>
+        <p id="game-id"></p>
+        <h3>Peserta tetap</h3><ul id="participants"></ul>
+        <p>Identitas permainan dan peserta telah dikunci oleh server. Aturan kartu, pembagian kartu,
+          giliran, dan skor belum tersedia. Refresh atau pulihkan sesi untuk kembali ke permainan yang sama.
+          Timeout lobby tidak menghapus peserta permainan.</p>
+      </section>
     </section>
     <details id="setup">
       <summary>Penyiapan server (pengelola)</summary>

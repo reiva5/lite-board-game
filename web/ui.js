@@ -10,6 +10,17 @@ export function renderRoster(document, result) {
   }
   document.getElementById('roster').hidden = false;
   document.getElementById('server').textContent = `Server ${result.state.serverId} - ${result.state.players.length}/4 pemain (minimum 2)`;
+  const game = result.state.phase === 'game';
+  document.getElementById('game').hidden = !game;
+  document.getElementById('lobby-help').hidden = game;
+  document.getElementById('game-id').textContent = game ? `ID permainan: ${result.state.gameId}` : '';
+  const participants = document.getElementById('participants');
+  participants.replaceChildren();
+  if (game) for (const id of result.state.participantIds) {
+    const item = document.createElement('li');
+    item.textContent = result.state.players.find(player => player.id === id).name;
+    participants.append(item);
+  }
 }
 
 export function mountRegistration(document, {
@@ -51,6 +62,7 @@ export function mountRegistration(document, {
       }
     }
     const confirmed = saved && active && !busy && key === displayedKey;
+    const game = key === displayedKey && latest?.state.phase === 'game';
     if (key !== selectedKey && !busy && !selectionError) {
       get('status').setAttribute('role', 'status');
       get('status').textContent = saved && !confirmed
@@ -58,14 +70,15 @@ export function mountRegistration(document, {
         : 'Masukkan tautan spreadsheet dan nama untuk bergabung.';
     }
     selectedKey = key;
-    get('registration-fields').hidden = saved;
-    get('name').required = !saved;
+    get('registration-fields').hidden = saved || game;
+    get('name').required = !saved && !game;
     get('session-recovery').hidden = !saved || confirmed;
     get('roster').hidden = key === null || displayedKey !== key;
-    for (const id of ['leave', 'ready', 'not-ready']) get(id).hidden = !confirmed;
+    for (const id of ['leave', 'ready', 'not-ready']) get(id).hidden = !confirmed || game;
     for (const id of buttons) get(id).disabled = busy
-      || (['ready', 'not-ready', 'leave'].includes(id) && !confirmed)
-      || (['initialize', 'join'].includes(id) && saved);
+      || (['ready', 'not-ready', 'leave'].includes(id) && (!confirmed || game))
+      || (['initialize', 'join'].includes(id) && saved)
+      || (id === 'join' && game);
     for (const id of ['endpoint', 'spreadsheet', 'name']) get(id).disabled = busy;
     const own = latest?.state.players.find(player => player.id === latest.playerId);
     if (own) {
@@ -114,6 +127,7 @@ export function mountRegistration(document, {
   }
   async function run(action) {
     if (stopped) return;
+    if (latest?.state.phase === 'game' && ['ready', 'not-ready', 'leave'].includes(action)) return;
     if (busy) {
       if (action === 'sync') refreshRequested = true;
       return;
@@ -134,6 +148,9 @@ export function mountRegistration(document, {
       current = client(true);
       apiSelection = selection;
       if (action === 'join' && current.hasSession()) action = 'resume';
+      if (action === 'join' && latest?.state.phase === 'game') {
+        throw new ClientError('GAME_STARTED', 'Permainan sudah dimulai. Hanya peserta dengan sesi tersimpan dapat memulihkan permainan.');
+      }
       recovering = current.hasSession();
       const result = action === 'join' ? await current.join(get('name').value)
         : action === 'ready' || action === 'not-ready' ? await current.setReady(action === 'ready')
@@ -153,13 +170,18 @@ export function mountRegistration(document, {
       renderRoster(document, result);
       get('status').textContent = action === 'initialize' ? 'Server dikonfirmasi. Anda belum terdaftar.'
         : result.left ? 'Keluar dikonfirmasi server.'
-          : 'Lobby tersinkron dan sesi dikonfirmasi. Semua siap tetap menunggu di lobby; permainan belum tersedia.';
+          : result.state.phase === 'game' ? 'Permainan dimulai oleh server dan sesi dikonfirmasi. Ini placeholder tersinkron; aturan kartu belum tersedia.'
+            : 'Lobby tersinkron dan sesi dikonfirmasi. Permainan otomatis dimulai saat 2-4 pemain semuanya siap.';
     } catch (error) {
       if (stopped || epoch !== generation || selection !== selected()) return;
       failures++;
       try { recovering = current?.hasSession() ?? false; } catch (storageError) {
         recovering = false;
         error = storageError;
+      }
+      if (error.code === 'GAME_STARTED' && recovering) {
+        failures = 0;
+        refreshRequested = true;
       }
       if (['SESSION_ENDED', 'INVALID_SESSION', 'SERVER_CHANGED', 'NO_SESSION'].includes(error.code)) {
         recovering = false;
@@ -206,7 +228,9 @@ export function mountRegistration(document, {
   listen(events, 'offline', () => {
     if ((!active && !recovering) || stopped) return;
     get('status').setAttribute('role', 'alert');
-    get('status').textContent = 'OFFLINE: Browser tidak terhubung. Data mungkin lama; sesi dapat berakhir setelah 60 detik tanpa heartbeat.';
+    get('status').textContent = latest?.state.phase === 'game'
+      ? 'OFFLINE: Browser tidak terhubung. Data mungkin lama; identitas dan peserta game tetap tersimpan.'
+      : 'OFFLINE: Browser tidak terhubung. Data mungkin lama; sesi lobby dapat berakhir setelah 60 detik tanpa heartbeat.';
   });
   listen(document, 'visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
   controls();

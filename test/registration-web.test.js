@@ -26,7 +26,10 @@ function server() {
     send: async command => {
       calls.push(command);
       try {
-        const outcome = applyCommand(state, command, deps); state = outcome.state; return outcome.result;
+        const outcome = applyCommand(state, command, deps);
+        state = outcome.state;
+        if (outcome.error) throw new ClientError(outcome.error.code, outcome.error.message);
+        return outcome.result;
       } catch (error) { throw new ClientError(error.code, error.message); }
     },
   };
@@ -984,4 +987,234 @@ test('public response strips unexpected secrets, random uses 32 crypto bytes, st
     await readFile(new URL(`../web/${asset[1]}`, import.meta.url));
   }
   for (const id of ['endpoint', 'spreadsheet', 'name']) assert.ok(html.includes(`for="${id}"`));
+});
+
+test('UI switches on focus/poll snapshot, inhibits lobby controls, restores game on refresh, and ignores stale lobby', async () => {
+  const f = await fixture(), document = fakeDocument(), events = fakeDocument(), timers = fakeTimers();
+  let stale;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, events, timers,
+    locks: { request: (_, operation) => operation() },
+    send: request => stale && request.action === 'sync' ? stale : f.provider.send(request),
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('name').value = '<A>';
+  await ui.run('join');
+  const b = createRegistrationClient({ ...f.options, storage: memory() });
+  await b.join('B'); await ui.run('ready');
+  stale = await f.client.sync();
+  await b.setReady(true);
+  stale = undefined;
+  events.focus(); await settle();
+  assert.equal(get('game').hidden, false);
+  assert.match(get('game-id').textContent, /ID permainan:/);
+  assert.deepEqual(get('participants').children.map(item => item.textContent), ['<A>', 'B']);
+  assert.equal(get('lobby-help').hidden, true);
+  assert.match(get('status').textContent, /placeholder tersinkron/);
+  for (const id of ['ready', 'not-ready', 'leave', 'join']) assert.equal(get(id).disabled, true);
+  for (const id of ['ready', 'not-ready', 'leave', 'registration-fields', 'session-recovery']) assert.equal(get(id).hidden, true);
+  assert.equal(get('name').required, false);
+  const calls = f.provider.calls.length, gameId = get('game-id').textContent;
+  for (const action of ['ready', 'not-ready', 'leave']) await ui.run(action);
+  assert.equal(f.provider.calls.length, calls);
+  await ui.run('join');
+  assert.equal(f.provider.calls.at(-1).action, 'resume');
+  assert.equal(f.provider.calls.length, calls + 1);
+  events.offline();
+  assert.match(get('status').textContent, /peserta game tetap tersimpan/);
+  stale = { ...(await b.sync()), playerId: JSON.parse(f.storage.getItem(f.client.lockKey)).playerId };
+  stale.state = { ...stale.state, revision: 0, phase: 'lobby' };
+  delete stale.state.gameId; delete stale.state.participantIds; delete stale.state.startedAt;
+  await ui.run('sync');
+  assert.match(get('status').textContent, /STALE_RESPONSE/);
+  assert.equal(get('game-id').textContent, gameId);
+  assert.equal(get('game').hidden, false);
+  ui.unmount();
+  const refreshed = fakeDocument();
+  const next = mountRegistration(refreshed, { ...f.options, config: {}, timers: fakeTimers(),
+    locks: { request: (_, operation) => operation() },
+  });
+  await settle();
+  assert.equal(refreshed.getElementById('game').hidden, false);
+  assert.equal(refreshed.getElementById('game-id').textContent, gameId);
+  assert.equal(refreshed.getElementById('leave').disabled, true);
+  assert.equal(refreshed.getElementById('leave').hidden, true);
+  assert.equal(refreshed.getElementById('registration-fields').hidden, true);
+  assert.equal(refreshed.getElementById('name').required, false);
+  next.unmount();
+});
+
+for (const action of ['leave', 'not-ready']) test(`UI recovers GAME_STARTED from racing ${action} without erasing identity`, async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  let race = false;
+  const b = createRegistrationClient({ ...f.options, storage: memory() });
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: async request => {
+      if (race && ['leave', 'setReady'].includes(request.action)) {
+        race = false;
+        await b.setReady(true);
+      }
+      return f.provider.send(request);
+    },
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl; get('name').value = 'A';
+  await ui.run('join'); await b.join('B'); await ui.run('ready');
+  const identity = JSON.parse(f.storage.getItem(f.client.lockKey));
+  race = true;
+  await ui.run(action);
+  assert.match(get('status').textContent, /GAME_STARTED/);
+  assert.equal(f.client.hasSession(), true);
+  assert.equal(JSON.parse(f.storage.getItem(f.client.lockKey)).pending, undefined);
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('session-recovery').hidden, false);
+  for (const id of ['leave', 'ready', 'not-ready']) assert.equal(get(id).hidden, true);
+  assert.equal(timers.delay, 0);
+  timers.fire(); await settle();
+  assert.equal(get('game').hidden, false);
+  assert.equal(JSON.parse(f.storage.getItem(f.client.lockKey)).playerId, identity.playerId);
+  assert.equal(get('leave').disabled, true);
+  for (const id of ['leave', 'ready', 'not-ready', 'session-recovery']) assert.equal(get(id).hidden, true);
+  ui.unmount();
+});
+
+test('semantic game recovery submits once with no required hidden name and no lobby controls', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  await f.client.join('A');
+  const b = createRegistrationClient({ ...f.options, storage: memory() });
+  await b.join('B'); await f.client.setReady(true); await b.setReady(true);
+  let release, prevented = 0;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: request => new Promise(resolve => { release = () => resolve(f.provider.send(request)); }),
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('spreadsheet').input();
+  const calls = f.provider.calls.length;
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('session-recovery').hidden, false);
+  assert.equal(timers.scheduled.size, 0);
+  assert.equal(get('join').click, undefined);
+  for (let i = 0; i < 2; i++) get('entry-form').submit({ preventDefault() { prevented++; } });
+  await settle();
+  for (const id of ['ready', 'not-ready', 'leave']) assert.equal(get(id).hidden, true);
+  release(); await settle();
+  assert.equal(prevented, 2);
+  assert.equal(f.provider.calls.length, calls + 1);
+  assert.equal(f.provider.calls.at(-1).action, 'resume');
+  assert.equal(get('game').hidden, false);
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  for (const id of ['ready', 'not-ready', 'leave', 'session-recovery']) assert.equal(get(id).hidden, true);
+  ui.unmount();
+});
+
+test('game selection invalidates delayed response without networking or exposing stale game controls', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers(), events = fakeDocument();
+  let release;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers, events,
+    locks: { request: (_, operation) => operation() },
+    send: request => request.action === 'sync'
+      ? new Promise(resolve => { release = () => resolve(f.provider.send(request)); })
+      : f.provider.send(request),
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl; get('name').value = 'A';
+  await ui.run('join');
+  const b = createRegistrationClient({ ...f.options, storage: memory() });
+  await b.join('B'); await b.setReady(true); await ui.run('ready');
+  const gameId = get('game-id').textContent;
+  const pending = ui.run('sync'); await settle();
+  for (const id of ['leave', 'ready', 'not-ready']) assert.equal(get(id).hidden, true);
+  const calls = f.provider.calls.length;
+  get('spreadsheet').value = spreadsheetUrl.replace('s'.repeat(30), 't'.repeat(30));
+  get('spreadsheet').input();
+  assert.equal(get('roster').hidden, true);
+  release(); await pending;
+  assert.equal(get('roster').hidden, true);
+  assert.equal(timers.scheduled.size, 0);
+  const after = f.provider.calls.length;
+  assert.equal(after, calls + 1);
+  get('spreadsheet').value = spreadsheetUrl; get('spreadsheet').change();
+  events.focus(); await settle();
+  assert.equal(f.provider.calls.length, after);
+  assert.equal(timers.scheduled.size, 0);
+  assert.equal(get('session-recovery').hidden, false);
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('roster').hidden, true);
+  await ui.run('resume');
+  assert.equal(get('game-id').textContent, gameId);
+  assert.equal(get('game').hidden, false);
+  for (const id of ['leave', 'ready', 'not-ready', 'session-recovery']) assert.equal(get(id).hidden, true);
+  ui.unmount();
+});
+
+test('lost final-ready response recovers from refresh with entry hidden and same game identity', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  let loseReady = false;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: async request => {
+      const result = await f.provider.send(request);
+      if (loseReady && request.action === 'setReady') throw new ClientError('NETWORK_ERROR', 'lost after commit');
+      return result;
+    },
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl; get('name').value = 'A';
+  await ui.run('join');
+  const b = createRegistrationClient({ ...f.options, storage: memory() });
+  await b.join('B'); await b.setReady(true);
+  loseReady = true; await ui.run('ready');
+  const pending = f.provider.calls.at(-1);
+  const gameId = (await b.sync()).state.gameId;
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('session-recovery').hidden, false);
+  for (const id of ['ready', 'not-ready', 'leave']) assert.equal(get(id).hidden, true);
+  ui.unmount();
+  const refreshed = fakeDocument();
+  const next = mountRegistration(refreshed, { ...f.options, config: {}, timers: fakeTimers(),
+    locks: { request: (_, operation) => operation() },
+  });
+  await settle();
+  assert.deepEqual(f.provider.calls.at(-1), pending);
+  assert.equal(refreshed.getElementById('game-id').textContent, `ID permainan: ${gameId}`);
+  assert.equal(refreshed.getElementById('game').hidden, false);
+  for (const id of ['ready', 'not-ready', 'leave', 'registration-fields', 'session-recovery']) {
+    assert.equal(refreshed.getElementById(id).hidden, true);
+  }
+  assert.equal(refreshed.getElementById('name').required, false);
+  next.unmount();
+});
+
+test('initializing a game never exposes new-join form or confirms an anonymous player', async () => {
+  const f = await fixture();
+  await f.client.join('A');
+  const b = createRegistrationClient({ ...f.options, storage: memory() });
+  await b.join('B'); await b.setReady(true); await f.client.setReady(true);
+  const document = fakeDocument(), timers = fakeTimers();
+  const ui = mountRegistration(document, { ...f.options, storage: memory(), config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  await ui.run('initialize');
+  assert.match(get('status').textContent, /Anda belum terdaftar/);
+  assert.equal(get('game').hidden, false);
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('join').disabled, true);
+  for (const id of ['ready', 'not-ready', 'leave', 'session-recovery']) assert.equal(get(id).hidden, true);
+  const calls = f.provider.calls.length;
+  await ui.run('join');
+  assert.match(get('status').textContent, /GAME_STARTED/);
+  assert.equal(f.provider.calls.length, calls);
+  assert.equal(timers.scheduled.size, 0);
+  ui.unmount();
 });
