@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Kartu 100 - Registrasi</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">KARTU 100 / TAHAP 1</p><h1>Satu spreadsheet, satu server.</h1>
+      <p>Daftar bersama 2-4 teman. Tidak perlu login Google untuk bermain.</p></header>
+    <section aria-labelledby="entry-title">
+      <h2 id="entry-title">Masuk server</h2>
+      <label for="endpoint">Endpoint publik Apps Script (/exec)</label>
+      <input id="endpoint" type="url" autocomplete="off" spellcheck="false" aria-describedby="endpoint-help">
+      <p id="endpoint-help" class="hint">Dapatkan dari pengelola deployment. Endpoint bukan kredensial.</p>
+      <label for="spreadsheet">Tautan Google Spreadsheet</label>
+      <input id="spreadsheet" type="url" autocomplete="off" spellcheck="false" aria-describedby="sheet-help">
+      <p id="sheet-help" class="hint">Pemilik harus berbagi akses Editor kepada akun khusus game terlebih dahulu.</p>
+      <button id="initialize" type="button" class="secondary">Inisialisasi server (tanpa mendaftar)</button>
+      <label for="name">Nama pemain</label>
+      <input id="name" type="text" maxlength="40" autocomplete="nickname" aria-describedby="name-help">
+      <p id="name-help" class="hint">Nama unik di server ini. Nama bukan kata sandi.</p>
+      <div class="actions">
+        <button id="join" type="button">Daftar pemain</button>
+        <button id="resume" type="button" class="secondary">Pulihkan / ulangi sesi</button>
+        <button id="leave" type="button" class="secondary">Keluar server</button>
+      </div>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true">Siapkan server, lalu daftarkan nama Anda.</p>
+    </section>
+    <section id="roster" aria-labelledby="roster-title" hidden>
+      <h2 id="roster-title">Pemain terdaftar</h2><p id="server"></p><ul id="players"></ul>
+      <p class="hint">Daftar ini adalah konfirmasi terakhir, bukan pembaruan langsung.</p>
+    </section>
+    <footer>Sesi disimpan di browser ini per endpoint dan spreadsheet. Jangan hapus data browser saat masih terdaftar.
+      Semua pemegang tautan bisa mencoba masuk. Editor spreadsheet dapat membaca/mengubah data game.
+      Gunakan akun Google khusus game, bukan akun pribadi.</footer>
+  </main>
+</body>
+</html>
