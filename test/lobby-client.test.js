@@ -135,3 +135,83 @@ test('a late response cannot overwrite a newer record using the same secret', as
   }).sync(), code('STALE_RESPONSE'));
   assert.equal(store.getItem(api.lockKey), displaced);
 });
+
+test('lost final-ready response recovers the same game and identity after reload and timeout', async () => {
+  const f = fixture(), store = storage(), a = client(f, store), b = client(f);
+  const joined = await a.join('A');
+  await b.join('B'); await b.setReady(true);
+  let final, lost = true;
+  const send = async request => {
+    const result = await f.send(request);
+    if (request.action === 'setReady') {
+      if (lost) { final = request; lost = false; throw new ClientError('NETWORK_ERROR', 'lost'); }
+      assert.deepEqual(request, final);
+    }
+    return result;
+  };
+  await assert.rejects(client(f, store, send).setReady(true), code('NETWORK_ERROR'));
+  const gameId = f.state.gameId;
+  f.time = 600001;
+  const recovered = await client(f, store, send).resume();
+  assert.equal(recovered.playerId, joined.playerId);
+  assert.equal(recovered.state.phase, 'game');
+  assert.equal(recovered.state.gameId, gameId);
+  assert.equal((await a.sync()).state.gameId, gameId);
+  assert.equal(JSON.parse(store.getItem(a.lockKey)).pending, undefined);
+});
+
+for (const action of ['leave', 'setReady']) test(`terminal ${action} rejection clears pending but never deletes game credentials`, async () => {
+  const f = fixture(), store = storage(), a = client(f, store), b = client(f);
+  const joined = await a.join('A');
+  await b.join('B'); await a.setReady(true);
+  const before = JSON.parse(store.getItem(a.lockKey));
+  const send = async request => {
+    await b.setReady(true);
+    assert.ok(JSON.parse(store.getItem(a.lockKey)).pending);
+    return f.send(request);
+  };
+  const racing = client(f, store, send);
+  await assert.rejects(action === 'leave' ? racing.leave() : racing.setReady(false), code('GAME_STARTED'));
+  const saved = JSON.parse(store.getItem(a.lockKey));
+  assert.equal(saved.secret, before.secret);
+  assert.equal(saved.playerId, joined.playerId);
+  assert.equal(saved.pending, undefined);
+  assert.equal((await a.sync()).state.phase, 'game');
+  assert.equal(f.state.players.length, 2);
+});
+
+test('pending leave rejected after offline reload unblocks sync; ambiguous rejection storage failure keeps recovery', async () => {
+  const f = fixture(), store = storage(), a = client(f, store), b = client(f);
+  await a.join('A'); await b.join('B'); await a.setReady(true);
+  await assert.rejects(client(f, store, async () => {
+    throw new ClientError('NETWORK_ERROR', 'offline before send');
+  }).leave(), code('NETWORK_ERROR'));
+  const pending = store.getItem(a.lockKey);
+  await b.setReady(true);
+  const failing = { ...store, setItem() { throw Error('quota'); } };
+  await assert.rejects(client(f, failing).resume(), code('STORAGE_ERROR'));
+  assert.equal(store.getItem(a.lockKey), pending);
+  await assert.rejects(client(f, store).resume(), code('GAME_STARTED'));
+  assert.equal((await a.sync()).state.phase, 'game');
+});
+
+test('late join rejection is definitive but lost existing join still recovers game participant', async () => {
+  const f = fixture(), store = storage(), a = client(f, store), b = client(f);
+  let lost = true;
+  const send = async request => {
+    const result = await f.send(request);
+    if (lost) { lost = false; throw new ClientError('NETWORK_ERROR', 'lost join response'); }
+    return result;
+  };
+  await assert.rejects(client(f, store, send).join('A'), code('NETWORK_ERROR'));
+  await b.join('B');
+  await f.send({ action: 'setReady', requestId: f.uuid(), spreadsheetUrl,
+    serverId: f.state.serverId, playerId: f.state.players[0].id,
+    secret: JSON.parse(store.getItem(a.lockKey)).secret, ready: true, readyVersion: 1 });
+  await b.setReady(true);
+  assert.equal((await a.resume()).state.phase, 'game');
+  const late = client(f);
+  await assert.rejects(late.join('C'), code('GAME_STARTED'));
+  assert.equal(late.hasSession(), false);
+  assert.equal(a.hasSession(), true);
+});

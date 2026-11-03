@@ -297,6 +297,17 @@ test('deployable build executes actual shared domain and runtime in Apps Script-
   assert.equal(send(command('setReady', { ...auth, ready: false, readyVersion: 2 })).data.state.players[0].ready, false);
   assert.equal(send(ready).data.state.players[0].ready, false);
   assert.equal(send(command('sync', { ...auth, secret: secret(2) })).error.code, 'INVALID_SESSION');
+  const b = send(command('join', { name: 'B', secret: secret(2) })).data;
+  send(command('setReady', { ...auth, ready: true, readyVersion: 3 }));
+  const final = command('setReady', {
+    serverId: b.state.serverId, playerId: b.playerId, secret: secret(2), ready: true, readyVersion: 1,
+  });
+  const game = send(final);
+  assert.equal(game.data.state.phase, 'game');
+  assert.deepEqual(send(final), game);
+  assert.equal(send(command('resume', auth)).data.state.gameId, game.data.state.gameId);
+  assert.equal(send(command('leave', auth)).error.code, 'GAME_STARTED');
+  assert.equal(send(command('join', { name: 'C', secret: secret(3) })).error.code, 'GAME_STARTED');
 });
 
 test('script lock serializes ready/leave/heartbeat contention and exact retries', () => {
