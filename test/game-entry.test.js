@@ -149,6 +149,21 @@ test('evicted ready and join retries cannot mutate or recreate a committed game'
   assert.deepEqual(f.state, game);
 });
 
+test('game join recovery rejects renaming an existing secret without changing the frozen game', () => {
+  const f = fixture(), a = f.join('A'), b = f.join('B');
+  f.apply(f.ready(a)); f.apply(f.ready(b));
+  const game = structuredClone(f.state), before = f.uuids;
+  f.time = 600010;
+  assert.throws(() => f.apply(f.command('join', {
+    name: 'Renamed', secret: a.auth.secret, serverId: a.auth.serverId,
+  })), code('SESSION_EXISTS'));
+  const recovered = f.apply(f.command('join', { name: ' a ', secret: a.auth.secret }));
+  assert.equal(recovered.result.playerId, a.auth.playerId);
+  assert.equal(recovered.changed, false);
+  assert.deepEqual(f.state, game);
+  assert.equal(f.uuids, before);
+});
+
 test('phase metadata corruption is rejected by backend/browser without reserved-cell overwrite', () => {
   const f = fixture(), a = f.join('A'), b = f.join('B');
   f.apply(f.ready(a)); f.apply(f.ready(b));
@@ -156,6 +171,8 @@ test('phase metadata corruption is rejected by backend/browser without reserved-
   for (const bad of [
     { ...game, phase: 'lobby' }, { ...game, phase: 'unknown' },
     { ...game, gameId: undefined }, { ...game, startedAt: -1 },
+    { ...game, startedAt: 1.5 }, { ...game, participantIds: null },
+    { ...game, participantIds: [a.auth.playerId] },
     { ...game, participantIds: [a.auth.playerId, a.auth.playerId] },
     { ...game, participantIds: [...game.participantIds].reverse() },
     { ...game, players: [game.players[0]] },
