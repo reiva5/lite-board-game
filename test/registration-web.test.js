@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { applyCommand } from '../game100/domain.js';
 import {
   ClientError, createRegistrationClient, postCommand, endpointUrl, randomHex, validateResult,
@@ -286,7 +287,7 @@ test('browser entry mounts the real UI and wires submit, initialize, resume, and
     assert.equal(url, config.endpoint || endpoint);
     return Response.json({ ok: true, data: await f.provider.send(JSON.parse(options.body)) });
   });
-  await import('../web/app.js?test=bootstrap');
+  await import('../web/app.js');
   const get = id => document.getElementById(id);
   assert.equal(get('endpoint').value, config.endpoint || endpoint);
   assert.equal(get('spreadsheet').value, spreadsheetUrl);
@@ -308,17 +309,22 @@ test('browser entry mounts the real UI and wires submit, initialize, resume, and
   assert.equal(get('registration-fields').hidden, false);
 });
 
-test('browser entry reports inaccessible localStorage instead of mounting an unsafe session', async t => {
-  const document = fakeDocument();
-  browserGlobals(t, {
-    document: { value: document },
-    localStorage: { get() { throw Error('storage blocked'); } },
-  });
-  await import('../web/app.js?test=storage-blocked');
-  const status = document.getElementById('status');
-  assert.equal(status.attributes.role, 'alert');
-  assert.match(status.textContent, /Penyimpanan browser tidak tersedia/);
-  assert.equal(document.getElementById('entry-form').submit, undefined);
+test('browser entry reports inaccessible localStorage instead of mounting an unsafe session', () => {
+  const source = `
+    import assert from 'node:assert/strict';
+    const status = { attributes: {}, setAttribute(key, value) { this.attributes[key] = value; } };
+    globalThis.document = {
+      getElementById(id) { assert.equal(id, 'status'); return status; },
+    };
+    Object.defineProperty(globalThis, 'localStorage', {
+      get() { throw Error('storage blocked'); },
+    });
+    await import(${JSON.stringify(new URL('../web/app.js', import.meta.url).href)});
+    assert.equal(status.attributes.role, 'alert');
+    assert.match(status.textContent, /Penyimpanan browser tidak tersedia/);
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('UI renders names as text and success only after confirmation; errors and loading explicit', async () => {

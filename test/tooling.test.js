@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -31,6 +31,37 @@ async function buildProject(t) {
     writeFile(new URL('apps-script/appsscript.json', root), manifest),
   ]);
   return root;
+}
+
+function runCli(name, root) {
+  // Keep the real entry-point URL for coverage; redirect only its project I/O.
+  const preload = `
+    import fs from 'node:fs/promises';
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { fileURLToPath, pathToFileURL } from 'node:url';
+    const sourceRoot = ${JSON.stringify(new URL('../', import.meta.url).href)};
+    const fixtureRoot = ${JSON.stringify(root.href)};
+    function redirect(path) {
+      const url = path instanceof URL ? path : pathToFileURL(path);
+      return url.href.startsWith(sourceRoot)
+        ? new URL(url.href.slice(sourceRoot.length), fixtureRoot) : path;
+    }
+    for (const name of ['mkdir', 'readFile', 'writeFile', 'readdir']) {
+      const original = fs[name];
+      fs[name] = (path, ...args) => original(redirect(path), ...args);
+    }
+    const copyFile = fs.copyFile;
+    fs.copyFile = (from, to, ...args) => copyFile(redirect(from), redirect(to), ...args);
+    const spawnSync = childProcess.spawnSync;
+    childProcess.spawnSync = (command, args, options) => spawnSync(command,
+      args[0] === '--check' ? ['--check', fileURLToPath(redirect(args[1]))] : args, options);
+    syncBuiltinESMExports();
+  `;
+  return spawnSync(process.execPath, [
+    '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+    fileURLToPath(new URL(`../scripts/${name}`, import.meta.url)),
+  ], { cwd: fileURLToPath(new URL('web/', root)), encoding: 'utf8' });
 }
 
 test('build concatenates shared sources in order, strips ESM, and copies the manifest exactly', async t => {
@@ -115,16 +146,14 @@ test('syntax checker detects actual invalid JavaScript without executing source 
   assert.match(results.at(-1).stderr, /SyntaxError/);
 });
 
-test('tooling CLI entry points work outside the project working directory and preserve failure exits', async t => {
+test('real tooling CLI entry points use isolated project I/O and preserve failure exits', async t => {
   const root = await buildProject(t);
-  await Promise.all(['check.js', 'build-apps-script.js'].map(name =>
-    copyFile(new URL(`../scripts/${name}`, import.meta.url), new URL(`scripts/${name}`, root))));
-  const cwd = fileURLToPath(new URL('web/', root));
-  const run = name => spawnSync(process.execPath, [fileURLToPath(new URL(`scripts/${name}`, root))],
-    { cwd, encoding: 'utf8' });
+  const run = name => runCli(name, root);
   const build = run('build-apps-script.js');
   assert.equal(build.status, 0, build.stderr);
-  assert.ok(build.stdout.includes(fileURLToPath(new URL('dist/apps-script/', root))));
+  assert.ok(build.stdout.includes(fileURLToPath(new URL('../dist/apps-script/', import.meta.url))));
+  const source = await readFile(new URL('dist/apps-script/Code.gs', root), 'utf8');
+  assert.equal(vm.runInNewContext(source + '\ndoPost()'), 'domain:runtime');
   assert.equal(await readFile(new URL('dist/apps-script/appsscript.json', root), 'utf8'), manifest);
   const check = run('check.js');
   assert.equal(check.status, 0, check.stderr);
