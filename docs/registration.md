@@ -21,12 +21,12 @@ Prasyarat yang belum tersedia:
 
 - Endpoint Apps Script `/exec` milik akun game, otorisasi akun itu, dan
   spreadsheet disposable yang dibagikan sebagai Editor kepada akun tersebut.
-- Pages aktif untuk repo ini. Repo privat; percobaan konfigurasi Pages oleh
-  koordinator menghasilkan HTTP 422: `Your current plan does not support GitHub
-  Pages for this repository.` GET situs saat pemeriksaan koordinator masih 404.
-  Diperlukan paket GitHub yang mendukung Pages untuk repo privat, atau keputusan
-  eksplisit pengguna mengenai alternatif. Implementasi ini **tidak** mengubah
-  visibility repo maupun target hosting.
+- Repo sudah diubah menjadi publik atas permintaan pengguna dan Pages telah
+  dikonfigurasi untuk GitHub Actions. Penolakan paket untuk repo privat
+  sebelumnya tidak lagi menjadi prasyarat. Halaman/workflow layer ini tetap
+  harus tersedia di `main` sebelum workflow deploy dapat menerbitkannya;
+  konfigurasi Pages saja tidak membuktikan situs sudah live. Preview lokal
+  tidak melakukan merge atau deploy.
 
 Jangan menyatakan deployment berhasil hanya karena CI hijau atau curl berhasil.
 
@@ -49,13 +49,16 @@ Jangan menyatakan deployment berhasil hanya karena CI hijau atau curl berhasil.
    login sebagai respons API. Setelah perubahan backend, buat versi baru dan
    edit deployment agar memakai versi itu.
 4. Simpan URL kanonis `https://script.google.com/macros/s/DEPLOYMENT_ID/exec`.
-   URL ini publik, bukan secret. Masukkan melalui input endpoint UI atau
-   `web/config.js` pada properti `endpoint`. Jangan isi OAuth token, password,
-   session secret, atau key akun Google pada config/frontend.
+   URL ini publik, bukan secret. Pengelola mengisinya di `web/config.js` pada
+   properti `endpoint`, atau melalui bagian tertutup **Penyiapan server
+   (pengelola)** di UI untuk setup lokal. Endpoint bukan isian form pemain.
+   Jangan isi OAuth token, password, session secret, atau key akun Google pada
+   config/frontend.
 5. Pemilik setiap spreadsheet membagikan akses **Editor** ke alamat akun game.
    Tidak perlu dan tidak ada allowlist ID spreadsheet manual. Buka frontend,
-   masukkan tautan Google Sheets dan klik **Inisialisasi server**. Setelah server
-   mengonfirmasi, daftar nama dengan tombol berbeda.
+   masukkan tautan Google Sheets, buka **Penyiapan server (pengelola)** dan klik
+   **Inisialisasi server**. Setelah server mengonfirmasi, pemain cukup mengisi
+   tautan spreadsheet + nama lalu klik **Gabung server**.
 
 Hanya URL HTTPS `docs.google.com/spreadsheets/d/ID` dengan suffix kanonis
 `edit`, `view`, `preview`, atau `copy` diterima (query/hash sharing opsional).
@@ -64,7 +67,7 @@ URL pengguna dan tidak menerima range/aksi spreadsheet generik.
 
 ## Menyiapkan GitHub Pages
 
-Setelah blocker paket/akses di atas diselesaikan, Settings > Pages > Build and
+Di Settings > Pages > Build and
 deployment > Source: **GitHub Actions**. Izinkan environment `github-pages`
 deploy dari `main`. Workflow `.github/workflows/pages.yml` berjalan hanya pada
 `main` atau manual dispatch dengan ref `main`, menjalankan syntax check + seluruh
@@ -137,6 +140,18 @@ tanpa lock untuk integrasi browser multi-tab.
 untuk endpoint + spreadsheet terakhir. Tidak ada polling. `renderRoster` memakai
 `textContent` untuk nama, tidak memakai `innerHTML`.
 
+Form awal `entry-form` hanya berisi `spreadsheet`, `name`, dan submit `join`.
+Endpoint serta `initialize` berada dalam `<details id="setup">` yang tertutup
+secara default; keduanya untuk pengelola, bukan langkah wajib setiap pemain.
+`registration-fields` disembunyikan bila ada sesi tersimpan untuk server pilihan.
+`session-recovery`/`resume` muncul hanya bila sesi itu perlu dipulihkan, misalnya
+respons join hilang atau resume gagal. `leave` berada di `roster` dan hanya
+ditampilkan setelah respons server mengonfirmasi identitas pemain yang aktif.
+Initialize sendiri tidak menampilkan leave. Sukses leave mengembalikan form
+pendaftaran. Mengganti pilihan server menyembunyikan roster/kontrol server lama;
+tidak memicu polling atau join baru. ID kontrol lama tetap dipertahankan untuk
+layer lobby/game; handler join sekarang melalui event submit `entry-form`.
+
 ### Persistensi, retry, dan concurrency
 
 Reserved storage **`Game100State!A1`** (bukan `State!A1`):
@@ -208,6 +223,64 @@ dapat menghabiskan quota Sheets/Apps Script, waktu eksekusi, concurrency atau
 storage akun game. Tidak ada rate limiter terdistribusi/CAPTCHA pada layer ini.
 Pantau quota/error akun, batasi sebaran endpoint, dan nonaktifkan deployment bila
 disalahgunakan. Jangan mengklaim siap untuk trafik publik besar.
+
+## Alternatif template spreadsheet dengan bound Apps Script (belum diimplementasikan)
+
+[Google mendukung bound scripts](https://developers.google.com/apps-script/guides/bound)
+yang ikut tersalin ketika pengguna membuat salinan spreadsheet. Bound script
+juga dapat [di-deploy sebagai web app](https://developers.google.com/apps-script/guides/web).
+Jadi model "pemilik menyalin template spreadsheet + script" memungkinkan,
+tetapi **menyalin tidak sama dengan deploy**: pemilik salinan masih harus
+mengotorisasi akses dan men-deploy endpoint `/exec` miliknya.
+Dengan **execute as me**, request pemain berjalan sebagai akun yang men-deploy;
+pemain dapat tetap anonim jika kebijakan akun mengizinkan akses Anyone.
+
+Ini bukan perubahan arsitektur pada layer ini. Saat ini backend tetap terpusat.
+Untuk alternatif per-spreadsheet, dibutuhkan rancangan penyiapan dan distribusi
+endpoint: URL spreadsheet **tidak mengandung URL deployment Apps Script**, dan
+frontend Pages tidak otomatis dapat membaca konfigurasi dalam sheet privat
+tanpa endpoint/autentikasi. Salah satu opsi adalah pengelola menyiapkan tautan
+undangan yang memuat endpoint publik; pemain tetap cukup mengisi dua field.
+Opsi tersebut belum dibuat atau diverifikasi live.
+
+Backend self-hosted juga harus membatasi target spreadsheet yang dikonfigurasi,
+bukan menerima sembarang ID yang dapat diakses akun pemilik. Jangan menganggap
+bound script otomatis membuat scope Sheets aman untuk satu file. Pada konteks
+web app, metode active-container seperti `getActiveSpreadsheet()` tidak
+tersedia seperti pada menu/editor; ID harus ditetapkan saat setup lalu dipakai
+secara eksplisit. Salinan oleh pemilik berbeda tidak menerima pembaruan source
+otomatis. Akun khusus game tetap disarankan karena kewenangan endpoint anonim.
+
+### Cara membaca quota Apps Script
+
+Angka berikut mengacu pada
+[quota resmi Google](https://developers.google.com/apps-script/guides/services/quotas)
+yang diperiksa 4 November 2026; dapat berubah sewaktu-waktu:
+
+| Batas | Consumer dan Google Workspace |
+| --- | --- |
+| Waktu satu eksekusi script | 6 menit |
+| Eksekusi serentak per user | 30 |
+| Eksekusi serentak per script | 1.000 |
+
+Quota harian ditetapkan **per user**, dengan reset 24 jam setelah request
+pertama, dan berbeda untuk sejumlah layanan antara akun consumer/Workspace.
+Ada pula throttle burst, batas layanan/produk terkait dan kebijakan akun;
+tabel Google tidak memberikan satu angka request/menit universal untuk
+`doPost` + SpreadsheetApp. Ketika batas tercapai, operasi melempar error dan
+dapat berhenti. Batas 1.000 per script tidak menghapus batas 30 per user.
+
+Dalam model terpusat execute-as-me, seluruh server memakai identitas eksekusi
+akun game yang sama. Script lock saat ini juga menyerialkan seluruh server.
+Salinan script oleh **akun berbeda** dapat memisahkan beban per-akun; banyak
+salinan oleh **akun yang sama** tetap berbagi quota per-user. Ini tidak
+menjadikan deployment bebas quota atau menjamin kapasitas tertentu.
+
+Angka **20.000/100.000 URL Fetch calls per hari** adalah untuk panggilan keluar
+`UrlFetchApp` dari script, **bukan** jatah request Fetch browser ke endpoint ini.
+Begitu pula **90 menit/6 jam trigger runtime per hari** adalah kategori trigger,
+bukan angka batas waktu total `doPost` yang boleh diasumsikan. Backend ini
+menggunakan SpreadsheetApp dan tidak menggunakan UrlFetchApp atau trigger.
 
 ## Smoke test live yang wajib sebelum dipakai
 
