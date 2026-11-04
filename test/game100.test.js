@@ -119,6 +119,38 @@ test('corrupt persisted structures are rejected instead of initialized over', ()
   assert.deepEqual(applyCommand(state, command('initialize'), deps).state, state);
 });
 
+test('persisted players reject invalid names and independently duplicated identities', () => {
+  const state = join(join(initial(), 'A').state, 'B', 2).state;
+  const original = JSON.stringify(state);
+  const [first, second] = state.players;
+  for (const invalid of [
+    { ...second, name: null },
+    { ...second, name: '' },
+    { ...second, name: 'B\n' },
+    { ...second, name: ' B ' },
+    { ...second, name: first.name, nameKey: first.nameKey },
+    { ...second, id: first.id },
+    { ...second, secretDigest: first.secretDigest },
+  ]) {
+    const snapshot = JSON.stringify({ ...state, players: [first, invalid] });
+    assert.throws(() => decodeState(snapshot), code('CORRUPT_STATE'));
+    assert.equal(JSON.stringify(state), original);
+  }
+});
+
+test('persisted retries cannot contradict an active player or reuse a request ID', () => {
+  const state = join(initial(), 'A').state;
+  const retry = state.retries[0];
+  for (const retries of [
+    [{ ...retry, secretDigest: hash(secret(2)) }],
+    [{ ...retry, action: 'leave' }],
+    [retry, { ...retry }],
+  ]) {
+    assert.throws(() => decodeState(JSON.stringify({ ...state, retries })), code('CORRUPT_STATE'));
+  }
+  assert.deepEqual(decodeState(JSON.stringify(state)), state);
+});
+
 function fakeRuntime() {
   const cells = new Map([['State!A1', 'unrelated'], ['Other!B2', 'preserve']]);
   const events = [];

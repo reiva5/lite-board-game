@@ -63,6 +63,16 @@ test('basic CRUD preserves falsy values and treats missing keys explicitly', asy
   assert.equal(text(), '{}');
 });
 
+test('deleting from absent or empty storage does not initialize or write a cell', async () => {
+  for (const initial of [undefined, '']) {
+    const f = fixture(initial);
+    assert.equal(await f.store.delete('missing'), false);
+    assert.equal(f.writes.length, 0);
+    assert.deepEqual(f.reads, ["'State'!A1"]);
+    assert.equal(f.text(), initial);
+  }
+});
+
 test('special object keys are own data, never prototype mutations', async () => {
   const { store } = fixture();
   await store.set('__proto__', { polluted: true });

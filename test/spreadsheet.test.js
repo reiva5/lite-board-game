@@ -91,6 +91,27 @@ test('HTTP errors preserve status without disclosing response contents or retryi
   }
 });
 
+test('HTTP error messages handle both present and empty provider status text', async () => {
+  for (const statusText of ['Forbidden', '']) {
+    let calls = 0;
+    const adapter = createGoogleSheetsAdapter({
+      spreadsheetId: 'id', accessToken: 'test-token',
+      fetch: async () => {
+        calls++;
+        return Response.json({ error: 'private sheet data' }, { status: 403, statusText });
+      },
+    });
+    await assert.rejects(adapter.read('A1'), error => {
+      assert.ok(error instanceof SpreadsheetApiError);
+      assert.equal(error.status, 403);
+      assert.equal(error.message, statusText
+        ? 'Google Sheets request failed (403 Forbidden)' : 'Google Sheets request failed (403)');
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
 test('network, token, and response failures propagate', async () => {
   const failure = new Error('offline');
   const adapter = createGoogleSheetsAdapter({
