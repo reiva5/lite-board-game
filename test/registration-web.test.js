@@ -7,6 +7,7 @@ import {
   ClientError, createRegistrationClient, postCommand, endpointUrl, randomHex, validateResult,
 } from '../web/client.js';
 import { mountRegistration, renderRoster } from '../web/ui.js';
+import { config } from '../web/config.js';
 
 const endpoint = 'https://script.google.com/macros/s/test_deployment/exec';
 const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${'s'.repeat(30)}/edit`;
@@ -154,6 +155,73 @@ test('storage quota prevents orphan writes; failure after join remains recoverab
   assert.equal((await f.client.resume()).state.players.length, 1);
 });
 
+test('missing sessions and unresolved joins cannot resume or leave as another identity', async () => {
+  const f = await fixture();
+  await assert.rejects(f.client.resume(), code('NO_SESSION'));
+  await assert.rejects(f.client.leave(), code('NO_SESSION'));
+  const offline = createRegistrationClient({
+    ...f.options, send: async () => { throw new ClientError('NETWORK_ERROR', 'offline'); },
+  });
+  await assert.rejects(offline.join('A'), code('NETWORK_ERROR'));
+  const saved = f.storage.getItem(offline.lockKey);
+  await assert.rejects(offline.leave(), code('PENDING_COMMAND'));
+  assert.equal(f.storage.getItem(offline.lockKey), saved);
+  assert.equal(f.provider.calls.length, 1);
+});
+
+test('unreadable storage and cleanup failures are explicit and preserve retry records', async () => {
+  const f = await fixture();
+  const unreadable = createRegistrationClient({
+    ...f.options, storage: { getItem() { throw Error('unavailable'); } },
+  });
+  assert.throws(() => unreadable.hasSession(), code('STORAGE_ERROR'));
+  await assert.rejects(unreadable.join('A'), code('STORAGE_ERROR'));
+  assert.equal(f.provider.calls.length, 1);
+
+  const storage = { ...f.storage, removeItem() { throw Error('unavailable'); } };
+  const client = createRegistrationClient({ ...f.options, storage });
+  await assert.rejects(client.join(''), error => {
+    assert.equal(error.code, 'STORAGE_ERROR');
+    assert.match(error.message, /ditolak/);
+    return true;
+  });
+  assert.equal(client.hasSession(), true);
+  assert.equal(JSON.parse(f.storage.getItem(client.lockKey)).pending.action, 'join');
+  f.storage.removeItem(client.lockKey);
+  const joined = await client.join('A');
+  await assert.rejects(client.leave(), error => {
+    assert.equal(error.code, 'STORAGE_ERROR');
+    assert.match(error.message, /Keluar dikonfirmasi/);
+    return true;
+  });
+  const pending = JSON.parse(f.storage.getItem(client.lockKey));
+  assert.equal(pending.playerId, joined.playerId);
+  assert.equal(pending.pending.action, 'leave');
+  const recovered = await f.client.resume();
+  assert.equal(recovered.left, true);
+  assert.equal(recovered.state.players.length, 0);
+  assert.equal(f.client.hasSession(), false);
+});
+
+test('default client transport uses fetch and crypto without injected replacements', async t => {
+  const provider = server(), storage = memory(), requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, endpoint);
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    return Response.json({ ok: true, data: await provider.send(request) });
+  });
+  const client = createRegistrationClient({ endpoint, spreadsheetUrl, storage });
+  await client.initialize();
+  const result = await client.join('A');
+  assert.match(requests[0].requestId, /^[a-f0-9]{64}$/);
+  assert.match(requests[1].secret, /^[a-f0-9]{64}$/);
+  assert.notEqual(requests[1].requestId, requests[1].secret);
+  assert.equal((await client.resume()).playerId, result.playerId);
+  assert.equal((await client.leave()).left, true);
+  assert.equal(client.hasSession(), false);
+});
+
 test('injected cross-tab lock serializes identity creation', async () => {
   const f = await fixture();
   let tail = Promise.resolve();
@@ -182,6 +250,76 @@ function fakeDocument() {
     createElement: () => new Element(),
   };
 }
+
+function browserGlobals(t, descriptors) {
+  for (const [name, descriptor] of Object.entries(descriptors)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, ...descriptor });
+    t.after(() => {
+      if (previous) Object.defineProperty(globalThis, name, previous);
+      else delete globalThis[name];
+    });
+  }
+}
+
+test('public configuration is immutable and only accepts a public deployment endpoint', () => {
+  assert.deepEqual(Object.keys(config), ['endpoint']);
+  assert.equal(typeof config.endpoint, 'string');
+  if (config.endpoint) assert.equal(endpointUrl(config.endpoint), config.endpoint);
+  assert.ok(Object.isFrozen(config));
+  assert.throws(() => { config.endpoint = endpoint; }, TypeError);
+});
+
+test('browser entry mounts the real UI and wires submit, initialize, resume, and leave', async t => {
+  const f = await fixture(), document = fakeDocument(), locked = [];
+  f.storage.setItem('game100:endpoint', endpoint);
+  f.storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
+  browserGlobals(t, {
+    document: { value: document },
+    localStorage: { value: f.storage },
+    navigator: { value: { locks: { request: (key, operation) => {
+      locked.push(key);
+      return operation();
+    } } } },
+  });
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, config.endpoint || endpoint);
+    return Response.json({ ok: true, data: await f.provider.send(JSON.parse(options.body)) });
+  });
+  await import('../web/app.js?test=bootstrap');
+  const get = id => document.getElementById(id);
+  assert.equal(get('endpoint').value, config.endpoint || endpoint);
+  assert.equal(get('spreadsheet').value, spreadsheetUrl);
+  assert.equal(f.provider.calls.length, 1);
+  await get('initialize').click();
+  assert.match(get('status').textContent, /Anda belum terdaftar/);
+  get('name').value = 'Browser player';
+  let prevented = false;
+  get('entry-form').submit({ preventDefault() { prevented = true; } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(prevented, true);
+  assert.equal(get('players').children[0].textContent, 'Browser player (Anda)');
+  await get('resume').click();
+  await get('leave').click();
+  assert.deepEqual(f.provider.calls.map(request => request.action), ['initialize', 'initialize', 'join', 'resume', 'leave']);
+  assert.equal(locked.length, 4);
+  assert.ok(locked.every(key => key === `game100:${config.endpoint || endpoint}:${'s'.repeat(30)}`));
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('registration-fields').hidden, false);
+});
+
+test('browser entry reports inaccessible localStorage instead of mounting an unsafe session', async t => {
+  const document = fakeDocument();
+  browserGlobals(t, {
+    document: { value: document },
+    localStorage: { get() { throw Error('storage blocked'); } },
+  });
+  await import('../web/app.js?test=storage-blocked');
+  const status = document.getElementById('status');
+  assert.equal(status.attributes.role, 'alert');
+  assert.match(status.textContent, /Penyimpanan browser tidak tersedia/);
+  assert.equal(document.getElementById('entry-form').submit, undefined);
+});
 
 test('UI renders names as text and success only after confirmation; errors and loading explicit', async () => {
   const f = await fixture(), document = fakeDocument();
@@ -358,6 +496,69 @@ test('submitting with a saved session resumes rather than joining a second playe
   assert.equal(f.provider.calls.at(-1).action, 'resume');
   assert.equal(f.provider.calls.at(-1).playerId, joined.playerId);
   assert.equal(document.getElementById('leave').hidden, false);
+});
+
+test('UI rejects browsers without Web Locks before sending a registration command', async () => {
+  const f = await fixture(), document = fakeDocument();
+  const ui = mountRegistration(document, {
+    storage: f.storage, config: { endpoint }, send: f.provider.send, random,
+  });
+  document.getElementById('spreadsheet').value = spreadsheetUrl;
+  document.getElementById('name').value = 'A';
+  await ui.run('join');
+  assert.match(document.getElementById('status').textContent, /BROWSER_UNSUPPORTED/);
+  assert.equal(document.getElementById('status').attributes.role, 'alert');
+  assert.equal(document.getElementById('join').disabled, false);
+  assert.equal(document.getElementById('leave').hidden, true);
+  assert.equal(f.provider.calls.length, 1);
+  assert.equal(f.client.hasSession(), false);
+});
+
+test('UI exposes storage read, corrupt session, and preference write failures without network requests', async () => {
+  const f = await fixture();
+  for (const failure of ['read', 'corrupt', 'write']) {
+    const document = fakeDocument();
+    const storage = memory();
+    storage.setItem('game100:endpoint', endpoint);
+    storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
+    if (failure === 'read') storage.getItem = () => { throw Error('blocked'); };
+    if (failure === 'corrupt') storage.setItem(f.client.lockKey, '{}');
+    if (failure === 'write') storage.setItem = () => { throw Error('quota'); };
+    const ui = mountRegistration(document, {
+      storage, config: { endpoint }, locks: { request: (_, operation) => operation() },
+      send: f.provider.send, random,
+    });
+    if (failure === 'corrupt') {
+      assert.equal(document.getElementById('status').attributes.role, 'alert');
+      assert.match(document.getElementById('status').textContent, /sesi browser tidak valid/);
+    } else {
+      document.getElementById('spreadsheet').value = spreadsheetUrl;
+      await ui.run('join');
+      assert.equal(document.getElementById('status').attributes.role, 'alert');
+      assert.match(document.getElementById('status').textContent, /STORAGE_ERROR/);
+    }
+    assert.equal(document.getElementById('leave').hidden, true);
+    assert.equal(f.provider.calls.length, 1);
+  }
+});
+
+test('UI ignores a second action while awaiting server confirmation', async () => {
+  const f = await fixture(), document = fakeDocument();
+  let complete;
+  const ui = mountRegistration(document, {
+    storage: f.storage, config: { endpoint }, locks: { request: (_, operation) => operation() }, random,
+    send: request => new Promise(resolve => { complete = () => resolve(f.provider.send(request)); }),
+  });
+  document.getElementById('spreadsheet').value = spreadsheetUrl;
+  document.getElementById('name').value = 'A';
+  const joining = ui.run('join');
+  await ui.run('initialize');
+  assert.equal(f.provider.calls.length, 1);
+  assert.equal(document.getElementById('initialize').disabled, true);
+  complete();
+  await joining;
+  assert.deepEqual(f.provider.calls.map(request => request.action), ['initialize', 'join']);
+  assert.equal(document.getElementById('initialize').disabled, false);
 });
 
 test('public response strips unexpected secrets, random uses 32 crypto bytes, static assets are relative', async () => {
