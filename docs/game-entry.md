@@ -133,12 +133,16 @@ Pemetaan semua file JavaScript non-test ada di
 [cakupan unit test registrasi](./registration.md#cakupan-unit-test-javascript).
 Coverage mencakup library, domain/runtime/entry Apps Script, browser bootstrap,
 config/client/UI, dan kedua script tooling. Gate `test:coverage` mewajibkan
-**100% line coverage** dengan kelima source include tetap aktif, tanpa ignore
+**100% line dan branch coverage** dengan kelima source include tetap aktif, tanpa ignore
 directive atau pengecualian kode game. Workflow test Node 22/24 dan Pages
 menjalankan gate yang sama. Test game tetap melengkapi suite parent
-registrasi/lobby; branch coverage dilaporkan terpisah dan tidak diklaim 100%.
+registrasi/lobby, termasuk pemulihan secret peserta dengan nama berbeda serta
+metadata participantIds/timestamp yang rusak. Guard cleanup fase diuji dengan
+game valid yang sudah committed dan waktu melewati timeout, bukan mutasi fase
+melalui fault injection pada JSON parser.
 Untuk audit LCOV, pastikan tepat 13 record source unik sesuai pemetaan tersebut
-dan tidak ada baris `DA` dengan hit count nol; module browser memakai URL
+dan tidak ada baris `DA` dengan hit count nol atau `BRDA` dengan hit nol/`-`;
+module browser memakai URL
 canonical agar tidak terhitung ganda.
 
 Fake Google/DOM/transport dan artifact VM **bukan** bukti integrasi Google/CORS.
