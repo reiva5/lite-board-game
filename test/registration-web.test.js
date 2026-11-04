@@ -197,9 +197,15 @@ test('UI renders names as text and success only after confirmation; errors and l
   assert.equal(get('join').disabled, true);
   assert.equal(get('roster').hidden, true);
   assert.equal(get('status').textContent, 'Menghubungi server...');
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('session-recovery').hidden, true);
   release(); await pending;
   assert.equal(get('join').disabled, false);
   assert.equal(get('roster').hidden, false);
+  assert.equal(get('leave').hidden, false);
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('session-recovery').hidden, true);
   assert.equal(get('players').children[0].textContent, '<img src=x onerror=alert(1)> (Anda)');
   get('endpoint').value = 'https://evil.example';
   await ui.run('initialize');
@@ -224,6 +230,134 @@ test('UI restores stored session automatically on refresh, but never joins autom
   await new Promise(resolve => setImmediate(resolve));
   assert.match(document.getElementById('status').textContent, /dikonfirmasi/);
   assert.equal(f.provider.calls.at(-1).playerId, registered.playerId);
+  assert.equal(document.getElementById('leave').hidden, false);
+  assert.equal(document.getElementById('session-recovery').hidden, true);
+  assert.equal(document.getElementById('registration-fields').hidden, true);
+});
+
+test('new player sees entry fields, not session controls; setup is collapsed in HTML', async () => {
+  const f = await fixture(), document = fakeDocument();
+  mountRegistration(document, { storage: f.storage, config: { endpoint }, random,
+    locks: { request: (_, operation) => operation() }, send: f.provider.send });
+  assert.equal(document.getElementById('registration-fields').hidden, false);
+  assert.equal(document.getElementById('session-recovery').hidden, true);
+  assert.equal(document.getElementById('leave').hidden, true);
+  assert.equal(document.getElementById('roster').hidden, true);
+  const html = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
+  const form = html.match(/<form id="entry-form">([\s\S]*?)<\/form>/)[1];
+  assert.deepEqual([...form.matchAll(/<input id="([^"]+)"/g)].map(match => match[1]), ['spreadsheet', 'name']);
+  assert.match(form, /id="join" type="submit">Gabung server/);
+  assert.match(html, /<details id="setup">[\s\S]*id="endpoint"[\s\S]*id="initialize"/);
+  assert.match(html, /<section id="roster"[\s\S]*id="leave"[^>]*hidden/);
+});
+
+test('UI shows recovery after ambiguous join failure, hides leave until recovered, then returns to entry after leave', async () => {
+  const f = await fixture(), document = fakeDocument();
+  let lost = true;
+  const ui = mountRegistration(document, { storage: f.storage, config: { endpoint }, random,
+    locks: { request: (_, operation) => operation() },
+    send: async request => {
+      const result = await f.provider.send(request);
+      if (request.action === 'join' && lost) { lost = false; throw new ClientError('NETWORK_ERROR', 'lost'); }
+      return result;
+    },
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('name').value = 'A';
+  await ui.run('join');
+  assert.match(get('status').textContent, /NETWORK_ERROR/);
+  assert.equal(get('session-recovery').hidden, false);
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('leave').hidden, true);
+  const request = f.provider.calls.at(-1);
+  await ui.run('resume');
+  assert.deepEqual(f.provider.calls.at(-1), request);
+  assert.equal(get('session-recovery').hidden, true);
+  assert.equal(get('leave').hidden, false);
+  await ui.run('leave');
+  assert.match(get('status').textContent, /Keluar dikonfirmasi/);
+  assert.equal(get('registration-fields').hidden, false);
+  assert.equal(get('name').required, true);
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('session-recovery').hidden, true);
+});
+
+test('initialization and definite join rejection never expose leave or recovery', async () => {
+  const f = await fixture(), document = fakeDocument();
+  const ui = mountRegistration(document, { storage: f.storage, config: { endpoint }, random,
+    locks: { request: (_, operation) => operation() }, send: f.provider.send,
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  await ui.run('initialize');
+  assert.match(get('status').textContent, /Anda belum terdaftar/);
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('session-recovery').hidden, true);
+  assert.equal(get('registration-fields').hidden, false);
+  get('name').value = '  ';
+  await ui.run('join');
+  assert.match(get('status').textContent, /INVALID_NAME/);
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('session-recovery').hidden, true);
+  assert.equal(get('registration-fields').hidden, false);
+});
+
+test('changing selected server hides stale roster and session controls without making requests', async () => {
+  const f = await fixture(), document = fakeDocument();
+  const ui = mountRegistration(document, { storage: f.storage, config: { endpoint }, random,
+    locks: { request: (_, operation) => operation() }, send: f.provider.send,
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('name').value = 'A';
+  await ui.run('join');
+  const calls = f.provider.calls.length;
+  get('spreadsheet').value = spreadsheetUrl.replace('s'.repeat(30), 't'.repeat(30));
+  get('spreadsheet').input();
+  assert.equal(get('roster').hidden, true);
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('session-recovery').hidden, true);
+  assert.equal(get('registration-fields').hidden, false);
+  assert.doesNotMatch(get('status').textContent, /dikonfirmasi/);
+  assert.equal(f.provider.calls.length, calls);
+});
+
+test('missing backend config and uninitialized server are explicit, not implicit initialization or success', async () => {
+  const f = await fixture(), document = fakeDocument();
+  const ui = mountRegistration(document, { storage: f.storage, config: {}, random,
+    locks: { request: (_, operation) => operation() }, send: f.provider.send,
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('name').value = 'A';
+  await ui.run('join');
+  assert.match(get('status').textContent, /NOT_CONFIGURED/);
+  assert.equal(f.provider.calls.length, 1);
+  get('endpoint').value = endpoint;
+  const empty = server();
+  const second = mountRegistration(document, { storage: memory(), config: { endpoint }, random,
+    locks: { request: (_, operation) => operation() }, send: empty.send,
+  });
+  get('spreadsheet').value = spreadsheetUrl;
+  await second.run('join');
+  assert.match(get('status').textContent, /NOT_INITIALIZED.*pengelola/);
+  assert.deepEqual(empty.calls.map(request => request.action), ['join']);
+  assert.equal(get('leave').hidden, true);
+});
+
+test('submitting with a saved session resumes rather than joining a second player', async () => {
+  const f = await fixture(), document = fakeDocument();
+  const joined = await f.client.join('A');
+  const ui = mountRegistration(document, { storage: f.storage, config: { endpoint }, random,
+    locks: { request: (_, operation) => operation() }, send: f.provider.send,
+  });
+  document.getElementById('spreadsheet').value = spreadsheetUrl;
+  document.getElementById('name').value = 'B';
+  await ui.run('join');
+  assert.equal(f.provider.calls.at(-1).action, 'resume');
+  assert.equal(f.provider.calls.at(-1).playerId, joined.playerId);
+  assert.equal(document.getElementById('leave').hidden, false);
 });
 
 test('public response strips unexpected secrets, random uses 32 crypto bytes, static assets are relative', async () => {

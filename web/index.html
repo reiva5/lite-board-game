@@ -14,27 +14,38 @@
       <p>Daftar bersama 2-4 teman. Tidak perlu login Google untuk bermain.</p></header>
     <section aria-labelledby="entry-title">
       <h2 id="entry-title">Masuk server</h2>
-      <label for="endpoint">Endpoint publik Apps Script (/exec)</label>
-      <input id="endpoint" type="url" autocomplete="off" spellcheck="false" aria-describedby="endpoint-help">
-      <p id="endpoint-help" class="hint">Dapatkan dari pengelola deployment. Endpoint bukan kredensial.</p>
-      <label for="spreadsheet">Tautan Google Spreadsheet</label>
-      <input id="spreadsheet" type="url" autocomplete="off" spellcheck="false" aria-describedby="sheet-help">
-      <p id="sheet-help" class="hint">Pemilik harus berbagi akses Editor kepada akun khusus game terlebih dahulu.</p>
-      <button id="initialize" type="button" class="secondary">Inisialisasi server (tanpa mendaftar)</button>
-      <label for="name">Nama pemain</label>
-      <input id="name" type="text" maxlength="40" autocomplete="nickname" aria-describedby="name-help">
-      <p id="name-help" class="hint">Nama unik di server ini. Nama bukan kata sandi.</p>
-      <div class="actions">
-        <button id="join" type="button">Daftar pemain</button>
-        <button id="resume" type="button" class="secondary">Pulihkan / ulangi sesi</button>
-        <button id="leave" type="button" class="secondary">Keluar server</button>
+      <form id="entry-form">
+        <label for="spreadsheet">Tautan Google Spreadsheet</label>
+        <input id="spreadsheet" type="url" required autocomplete="off" spellcheck="false" aria-describedby="sheet-help">
+        <p id="sheet-help" class="hint">Gunakan tautan server yang sudah disiapkan pengelola.</p>
+        <div id="registration-fields">
+          <label for="name">Nama pemain</label>
+          <input id="name" type="text" required maxlength="40" autocomplete="nickname" aria-describedby="name-help">
+          <p id="name-help" class="hint">Nama unik di server ini. Nama bukan kata sandi.</p>
+          <button id="join" type="submit">Gabung server</button>
+        </div>
+      </form>
+      <div id="session-recovery" hidden>
+        <p>Ada sesi tersimpan untuk server ini. Lanjutkan dengan identitas yang sama, bukan mendaftar ulang.</p>
+        <button id="resume" type="button" class="secondary">Pulihkan sesi</button>
       </div>
-      <p id="status" role="status" aria-live="polite" aria-atomic="true">Siapkan server, lalu daftarkan nama Anda.</p>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true">Masukkan tautan spreadsheet dan nama untuk bergabung.</p>
     </section>
     <section id="roster" aria-labelledby="roster-title" hidden>
       <h2 id="roster-title">Pemain terdaftar</h2><p id="server"></p><ul id="players"></ul>
       <p class="hint">Daftar ini adalah konfirmasi terakhir, bukan pembaruan langsung.</p>
+      <button id="leave" type="button" class="secondary" hidden>Keluar server</button>
     </section>
+    <details id="setup">
+      <summary>Penyiapan server (pengelola)</summary>
+      <p>Pemain tidak perlu mengisi bagian ini. Pengelola menyiapkan backend dan spreadsheet sebelum membagikan tautan server.</p>
+      <label for="endpoint">Endpoint publik Apps Script (/exec)</label>
+      <input id="endpoint" type="url" autocomplete="off" spellcheck="false" aria-describedby="endpoint-help">
+      <p id="endpoint-help" class="hint">Konfigurasikan sekali oleh pengelola. Endpoint bukan kredensial.
+        Pemilik spreadsheet harus berbagi akses Editor kepada akun khusus game.</p>
+      <p>Gunakan tautan spreadsheet pada form di atas. Inisialisasi tidak mendaftarkan pemain dan tidak menimpa server yang sudah valid.</p>
+      <button id="initialize" type="button" class="secondary">Inisialisasi server</button>
+    </details>
     <footer>Sesi disimpan di browser ini per endpoint dan spreadsheet. Jangan hapus data browser saat masih terdaftar.
       Semua pemegang tautan bisa mencoba masuk. Editor spreadsheet dapat membaca/mengubah data game.
       Gunakan akun Google khusus game, bukan akun pribadi.</footer>
