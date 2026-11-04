@@ -7,7 +7,7 @@
   "files": ["src", "README.md"],
   "scripts": {
     "test": "node scripts/build-apps-script.js && node --test",
-    "test:coverage": "node scripts/build-apps-script.js && node --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-include=src/** --test-coverage-include=game100/** --test-coverage-include=apps-script/** --test-coverage-include=web/** --test-coverage-include=scripts/**",
+    "test:coverage": "node scripts/build-apps-script.js && node --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-include=src/** --test-coverage-include=game100/** --test-coverage-include=apps-script/** --test-coverage-include=web/** --test-coverage-include=scripts/**",
     "check": "node scripts/check.js",
     "build:apps-script": "node scripts/build-apps-script.js"
   },

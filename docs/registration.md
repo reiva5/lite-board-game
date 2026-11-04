@@ -33,7 +33,7 @@ Jangan menyatakan deployment berhasil hanya karena CI hijau atau curl berhasil.
 ## Cakupan unit test JavaScript
 
 Jalankan `npm test` untuk seluruh suite, `npm run test:coverage` untuk laporan
-coverage Node dengan ambang **100% line coverage**, dan `npm run check` untuk
+coverage Node dengan ambang **100% line dan branch coverage**, dan `npm run check` untuk
 syntax check. Workflow test Node 22/24 serta build Pages menjalankan
 `test:coverage`; coverage di bawah ambang membuat command gagal. Tidak ada
 dependency pengujian tambahan. Setiap file JavaScript non-test memiliki pengujian:
@@ -57,7 +57,13 @@ module sumber. Subprocess mewarisi lingkungan coverage Node sehingga eksekusi
 entry point ikut dihitung. Fixture dibersihkan sesudah pengujian; tidak ada
 baris/file kode produksi yang diabaikan untuk menaikkan coverage. Pengujian ini
 tidak membuktikan deployment Google, CORS lintas origin asli, atau perilaku browser
-live; 100% line coverage juga bukan jaminan semua cabang atau bug sudah teruji.
+live; 100% line dan branch coverage juga bukan jaminan semua kombinasi kondisi
+atau bug sudah teruji. Skenario tambahan mencakup nama/identitas persisted yang
+tidak valid, retry yang bertentangan dengan pemain aktif, status text HTTP kosong
+atau terisi, dan penghapusan dari storage kosong tanpa menulis sel. Pengujian
+defensif renderer dan fault injection akses DOM saat startup memeriksa label
+identitas yang sudah keluar serta kegagalan browser tanpa menghapus sesi atau
+mengirim request.
 
 ## Menyiapkan backend
 
