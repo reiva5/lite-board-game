@@ -30,6 +30,29 @@ Prasyarat yang belum tersedia:
 
 Jangan menyatakan deployment berhasil hanya karena CI hijau atau curl berhasil.
 
+## Cakupan unit test JavaScript
+
+Jalankan `npm test` untuk seluruh suite, `npm run test:coverage` untuk laporan
+coverage Node, dan `npm run check` untuk syntax check. Tidak ada dependency
+pengujian tambahan. Setiap file JavaScript non-test memiliki pengujian:
+
+| File | Suite |
+| --- | --- |
+| `src/index.js`, `src/spreadsheet.js`, `src/google-sheets.js` | `test/spreadsheet.test.js` menguji public exports, validasi, request/response, token provider, dan error. |
+| `src/state-store.js` | `test/state-store.test.js` menguji persistence, antrean, snapshot, dan kegagalan storage. |
+| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js` menguji aturan registrasi, validasi payload, lock, retry, dan reserved cell. |
+| `apps-script/entry.js` | `test/apps-script-entry.test.js` menguji binding setiap layanan Google, digest signed-byte, body kosong, dan output JSON; `test/game100.test.js` juga menjalankan artifact gabungan. |
+| `web/client.js`, `web/ui.js` | `test/registration-web.test.js` menguji transport, identitas, pemulihan, event UI, loading, dan kegagalan storage/Web Locks. |
+| `web/app.js`, `web/config.js` | `test/registration-web.test.js` mengimpor entry point browser asli dengan fake browser globals dan menguji konfigurasi publik immutable serta startup gagal. |
+| `scripts/build-apps-script.js`, `scripts/check.js` | `test/tooling.test.js` menguji fungsi tooling pada fixture sementara, isi artifact, pemilihan file, dan propagasi error; smoke test CLI menguji exit status dari working directory lain. |
+
+Coverage hanya mencakup kode pada `src/`, `game100/`, `apps-script/`, `web/`,
+dan `scripts/`, bukan test atau salinan fixture/artifact. Entry Apps Script
+dijalankan dalam VM dengan nama file sumber aslinya agar ikut terukur. Fixture
+tooling terisolasi dan dibersihkan sesudah pengujian. Pengujian ini tidak
+membuktikan deployment Google, CORS lintas origin asli, atau perilaku browser
+live.
+
 ## Menyiapkan backend
 
 1. Gunakan akun Google **khusus game**, tanpa spreadsheet pribadi/pekerjaan.

@@ -114,12 +114,17 @@ Penulisan lewat API tidak menjalankan trigger `onEdit` Google Apps Script.
 
 ```sh
 npm test
+npm run test:coverage
 npm run check
 ```
 
 Test memakai Node test runner dan fake Fetch/adapter, tanpa credential atau akses
-jaringan. Integrasi dengan akun Google sungguhan memerlukan token dan spreadsheet
-uji sendiri; tidak disertakan atau diasumsikan tersedia.
+jaringan. `test:coverage` melaporkan coverage kode library, aplikasi, entry point,
+dan tooling; file test dan artifact hasil build tidak dihitung sebagai kode
+produksi. Pemetaan seluruh file JavaScript ke suite pengujian ada di
+[dokumentasi registrasi](docs/registration.md#cakupan-unit-test-javascript).
+Integrasi dengan akun Google sungguhan memerlukan token dan spreadsheet uji
+sendiri; tidak disertakan atau diasumsikan tersedia.
 
 ## Aplikasi Kartu 100 (registrasi)
 
