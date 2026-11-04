@@ -121,13 +121,19 @@ pemulihan, sedangkan refresh halaman tetap auto-resume.
 
 ## Verifikasi dan blocker deployment
 
-Jalankan `npm run check`, `npm test`, `npm run build:apps-script`, dan
+Jalankan `npm run check`, `npm test`, `npm run test:coverage`, `npm run build:apps-script`, dan
 `git diff --check`. Tes deterministik mencakup 2/3/4 pemain, pencegahan start,
 lock contention dan kedua urutan membership/final-ready, leave-triggered start,
 timeout reset, replay/eviction, reconnect lama, late join, corrupt metadata
 tanpa overwrite, artifact VM, lost final-ready response, terminal pending
 rejection/storage failure, auto-switch UI/fokus/refresh, disabled controls,
 dan respons lobby stale.
+
+Pemetaan semua file JavaScript non-test ada di
+[cakupan unit test registrasi](./registration.md#cakupan-unit-test-javascript).
+Coverage mencakup library, domain/runtime/entry Apps Script, browser bootstrap,
+config/client/UI, dan kedua script tooling; tidak ada threshold arbitrer atau
+pengecualian kode game. Test game tetap melengkapi suite parent registrasi/lobby.
 
 Fake Google/DOM/transport dan artifact VM **bukan** bukti integrasi Google/CORS.
 Koordinator akan menjalankan harness browser multi-client terisolasi; layer ini
