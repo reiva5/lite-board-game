@@ -42,7 +42,7 @@ dependency pengujian tambahan. Setiap file JavaScript non-test memiliki pengujia
 | --- | --- |
 | `src/index.js`, `src/spreadsheet.js`, `src/google-sheets.js` | `test/spreadsheet.test.js` menguji public exports, validasi, request/response, token provider, dan error. |
 | `src/state-store.js` | `test/state-store.test.js` menguji persistence, antrean, snapshot, dan kegagalan storage. |
-| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js` dan `test/lobby-domain.test.js` menguji registrasi/lobby, validasi payload, ready, heartbeat, timeout, lock, retry, dan reserved cell. |
+| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js`, `test/lobby-domain.test.js`, dan `test/game-entry.test.js` menguji registrasi/lobby, validasi payload, ready, heartbeat, timeout, lock, retry, reserved cell, start atomik, peserta game tetap, dan reconnect. |
 | `apps-script/entry.js` | `test/apps-script-entry.test.js` menguji binding setiap layanan Google, digest signed-byte, body kosong, dan output JSON; `test/game100.test.js` juga menjalankan artifact gabungan. |
 | `web/client.js`, `web/ui.js` | `test/registration-web.test.js` dan `test/lobby-client.test.js` menguji transport, identitas, pemulihan, ready, polling, event UI, loading, dan kegagalan storage/Web Locks. |
 | `web/app.js`, `web/config.js` | `test/registration-web.test.js` mengimpor entry point browser asli dengan fake browser globals dan menguji konfigurasi publik immutable serta startup gagal. |
