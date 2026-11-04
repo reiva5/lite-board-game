@@ -327,6 +327,39 @@ test('browser entry reports inaccessible localStorage instead of mounting an uns
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('roster never marks a departed identity as the current player', async () => {
+  const f = await fixture(), result = await f.client.join('A');
+  const document = fakeDocument();
+  renderRoster(document, { ...result, left: true });
+  assert.deepEqual(document.getElementById('players').children.map(item => item.textContent), ['A']);
+  assert.equal(document.getElementById('roster').hidden, false);
+  assert.equal(document.getElementById('server').textContent, `Server ${result.state.serverId} - 1/4 pemain`);
+});
+
+test('UI reports unexpected DOM access failures during startup without resuming', async () => {
+  const f = await fixture(), document = fakeDocument();
+  await f.client.join('A');
+  f.storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
+  const lookup = document.getElementById.bind(document);
+  let endpointReads = 0, endpointValue;
+  Object.defineProperty(lookup('endpoint'), 'value', {
+    // Fail inside the startup client lookup, after initial controls and field checks.
+    get() { if (++endpointReads === 3) throw Error('DOM unavailable'); return endpointValue; },
+    set(value) { endpointValue = value; },
+  });
+  const saved = f.storage.getItem(f.client.lockKey);
+  mountRegistration(document, {
+    storage: f.storage, config: { endpoint }, random,
+    locks: { request: () => assert.fail('must not acquire a lock') },
+    send: () => assert.fail('must not send a command'),
+  });
+  assert.equal(endpointReads, 3);
+  assert.equal(lookup('status').textContent, 'Penyimpanan browser gagal dibaca.');
+  assert.equal(lookup('leave').hidden, true);
+  assert.equal(lookup('session-recovery').hidden, false);
+  assert.equal(f.storage.getItem(f.client.lockKey), saved);
+});
+
 test('UI renders names as text and success only after confirmation; errors and loading explicit', async () => {
   const f = await fixture(), document = fakeDocument();
   const get = id => document.getElementById(id);
