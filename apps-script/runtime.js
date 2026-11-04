@@ -20,7 +20,7 @@ export function createHandler(services) {
           if (!sheet) sheet = book.insertSheet('Game100State');
           sheet.getRange('A1').setValue(JSON.stringify(outcome.state));
         }
-        return { ok: true, data: outcome.result };
+        return outcome.error ? { ok: false, error: outcome.error } : { ok: true, data: outcome.result };
       } finally {
         // Flush even on a failed write: the provider may have buffered a mutation.
         try { services.flush(); } finally { lock.releaseLock(); }

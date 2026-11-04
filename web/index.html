@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Kartu 100 - Registrasi</title>
+  <title>Kartu 100 - Lobby</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.js"></script>
 </head>
 <body>
   <main>
-    <header><p class="eyebrow">KARTU 100 / TAHAP 1</p><h1>Satu spreadsheet, satu server.</h1>
-      <p>Daftar bersama 2-4 teman. Tidak perlu login Google untuk bermain.</p></header>
+    <header><p class="eyebrow">KARTU 100 / TAHAP 2</p><h1>Satu spreadsheet, satu server.</h1>
+      <p>Lobby untuk 2-4 pemain. Tidak perlu login Google untuk bermain.</p></header>
     <section aria-labelledby="entry-title">
       <h2 id="entry-title">Masuk server</h2>
       <form id="entry-form">
@@ -33,8 +33,14 @@
     </section>
     <section id="roster" aria-labelledby="roster-title" hidden>
       <h2 id="roster-title">Pemain terdaftar</h2><p id="server"></p><ul id="players"></ul>
-      <p class="hint">Daftar ini adalah konfirmasi terakhir, bukan pembaruan langsung.</p>
-      <button id="leave" type="button" class="secondary" hidden>Keluar server</button>
+      <p class="hint">Sinkronisasi sekaligus heartbeat sekitar setiap 10 detik. Tanpa heartbeat selama 60 detik,
+        pemain dikeluarkan dan semua pemain tersisa menjadi belum siap saat request berikutnya.
+        Tab latar belakang dapat ditunda browser. Semua siap belum memulai permainan pada tahap ini.</p>
+      <div class="actions">
+        <button id="ready" type="button" hidden>Siap</button>
+        <button id="not-ready" type="button" class="secondary" hidden>Belum siap</button>
+        <button id="leave" type="button" class="secondary" hidden>Keluar server</button>
+      </div>
     </section>
     <details id="setup">
       <summary>Penyiapan server (pengelola)</summary>

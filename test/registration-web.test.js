@@ -244,9 +244,12 @@ function fakeDocument() {
     replaceChildren() { this.children = []; }
     append(element) { this.children.push(element); }
     addEventListener(event, callback) { this[event] = callback; }
+    removeEventListener(event) { delete this[event]; }
   }
   const elements = new Map();
   return {
+    addEventListener(event, callback) { this[event] = callback; },
+    removeEventListener(event) { delete this[event]; },
     getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
     createElement: () => new Element(),
   };
@@ -271,7 +274,7 @@ test('public configuration is immutable and only accepts a public deployment end
   assert.throws(() => { config.endpoint = endpoint; }, TypeError);
 });
 
-test('browser entry mounts the real UI and wires submit, initialize, resume, and leave', async t => {
+test('browser entry mounts the real UI and wires submit, initialize, resume, ready, and leave', async t => {
   const f = await fixture(), document = fakeDocument(), locked = [];
   f.storage.setItem('game100:endpoint', endpoint);
   f.storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
@@ -299,11 +302,16 @@ test('browser entry mounts the real UI and wires submit, initialize, resume, and
   get('entry-form').submit({ preventDefault() { prevented = true; } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(prevented, true);
-  assert.equal(get('players').children[0].textContent, 'Browser player (Anda)');
+  assert.equal(get('players').children[0].textContent, 'Browser player (Anda) - Belum siap');
   await get('resume').click();
+  await get('ready').click();
+  assert.equal(get('players').children[0].textContent, 'Browser player (Anda) - Siap');
+  await get('not-ready').click();
+  assert.equal(get('players').children[0].textContent, 'Browser player (Anda) - Belum siap');
   await get('leave').click();
-  assert.deepEqual(f.provider.calls.map(request => request.action), ['initialize', 'initialize', 'join', 'resume', 'leave']);
-  assert.equal(locked.length, 4);
+  assert.deepEqual(f.provider.calls.map(request => request.action),
+    ['initialize', 'initialize', 'join', 'resume', 'setReady', 'setReady', 'leave']);
+  assert.equal(locked.length, 6);
   assert.ok(locked.every(key => key === `game100:${config.endpoint || endpoint}:${'s'.repeat(30)}`));
   assert.equal(get('leave').hidden, true);
   assert.equal(get('registration-fields').hidden, false);
@@ -331,9 +339,9 @@ test('roster never marks a departed identity as the current player', async () =>
   const f = await fixture(), result = await f.client.join('A');
   const document = fakeDocument();
   renderRoster(document, { ...result, left: true });
-  assert.deepEqual(document.getElementById('players').children.map(item => item.textContent), ['A']);
+  assert.deepEqual(document.getElementById('players').children.map(item => item.textContent), ['A - Belum siap']);
   assert.equal(document.getElementById('roster').hidden, false);
-  assert.equal(document.getElementById('server').textContent, `Server ${result.state.serverId} - 1/4 pemain`);
+  assert.equal(document.getElementById('server').textContent, `Server ${result.state.serverId} - 1/4 pemain (minimum 2)`);
 });
 
 test('UI reports unexpected DOM access failures during startup without resuming', async () => {
@@ -354,7 +362,7 @@ test('UI reports unexpected DOM access failures during startup without resuming'
     send: () => assert.fail('must not send a command'),
   });
   assert.equal(endpointReads, 3);
-  assert.equal(lookup('status').textContent, 'Penyimpanan browser gagal dibaca.');
+  assert.equal(lookup('status').textContent, 'STORAGE_ERROR: Operasi browser gagal; sesi tidak dihapus. Periksa penyimpanan browser.');
   assert.equal(lookup('leave').hidden, true);
   assert.equal(lookup('session-recovery').hidden, false);
   assert.equal(f.storage.getItem(f.client.lockKey), saved);
@@ -374,21 +382,23 @@ test('UI renders names as text and success only after confirmation; errors and l
   assert.equal(get('join').disabled, true);
   assert.equal(get('roster').hidden, true);
   assert.equal(get('status').textContent, 'Menghubungi server...');
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(get('leave').hidden, true);
   assert.equal(get('session-recovery').hidden, true);
   release(); await pending;
-  assert.equal(get('join').disabled, false);
+  assert.equal(get('join').disabled, true);
   assert.equal(get('roster').hidden, false);
+  assert.equal(get('players').children[0].textContent, '<img src=x onerror=alert(1)> (Anda) - Belum siap');
   assert.equal(get('leave').hidden, false);
   assert.equal(get('registration-fields').hidden, true);
   assert.equal(get('name').required, false);
   assert.equal(get('session-recovery').hidden, true);
-  assert.equal(get('players').children[0].textContent, '<img src=x onerror=alert(1)> (Anda)');
   get('endpoint').value = 'https://evil.example';
   await ui.run('initialize');
   assert.equal(get('status').attributes.role, 'alert');
   assert.match(get('status').textContent, /INVALID_ENDPOINT/);
   assert.equal(get('roster').hidden, true);
+  ui.unmount();
 });
 
 test('UI restores stored session automatically on refresh, but never joins automatically', async () => {
@@ -399,7 +409,7 @@ test('UI restores stored session automatically on refresh, but never joins autom
   const document = fakeDocument();
   let done;
   const completed = new Promise(resolve => { done = resolve; });
-  mountRegistration(document, { storage: f.storage, config: {}, random,
+  const ui = mountRegistration(document, { storage: f.storage, config: {}, random,
     locks: { request: (_, operation) => operation() },
     send: async request => { assert.equal(request.action, 'resume'); const result = await f.provider.send(request); done(); return result; },
   });
@@ -410,6 +420,252 @@ test('UI restores stored session automatically on refresh, but never joins autom
   assert.equal(document.getElementById('leave').hidden, false);
   assert.equal(document.getElementById('session-recovery').hidden, true);
   assert.equal(document.getElementById('registration-fields').hidden, true);
+  ui.unmount();
+});
+
+function fakeTimers() {
+  let next = 0;
+  const scheduled = new Map();
+  return {
+    scheduled,
+    setTimeout(callback, delay) { const id = ++next; scheduled.set(id, { callback, delay }); return id; },
+    clearTimeout(id) { scheduled.delete(id); },
+    fire() {
+      const [id, task] = scheduled.entries().next().value;
+      scheduled.delete(id); task.callback();
+    },
+    get delay() { return scheduled.values().next().value?.delay; },
+  };
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('UI rejects changed-server and older initialization snapshots without replacing the roster', async () => {
+  for (const mismatch of ['server', 'revision']) {
+    const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+    let responseCount = 0;
+    const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+      locks: { request: (_, operation) => operation() },
+      send: async request => {
+        const result = await f.provider.send(request);
+        result.state.revision = 5;
+        if (++responseCount === 2) {
+          if (mismatch === 'server') result.state.serverId = random();
+          else result.state.revision = 4;
+        }
+        return result;
+      },
+    });
+    document.getElementById('spreadsheet').value = spreadsheetUrl;
+    await ui.run('initialize');
+    const previous = document.getElementById('server').textContent;
+    await ui.run('initialize');
+    assert.match(document.getElementById('status').textContent,
+      mismatch === 'server' ? /SERVER_CHANGED/ : /STALE_RESPONSE/);
+    assert.equal(document.getElementById('server').textContent, previous);
+    assert.equal(document.getElementById('roster').hidden, mismatch === 'server');
+    assert.equal(document.getElementById('ready').disabled, true);
+    assert.equal(timers.scheduled.size, 0);
+    ui.unmount();
+  }
+});
+
+test('UI surfaces storage failure while recovering a failed heartbeat without deleting the session', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  let fail = false;
+  const read = f.storage.getItem;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: async request => {
+      if (fail) {
+        f.storage.getItem = () => { throw Error('storage blocked'); };
+        throw new ClientError('NETWORK_ERROR', 'offline');
+      }
+      return f.provider.send(request);
+    },
+  });
+  document.getElementById('spreadsheet').value = spreadsheetUrl;
+  document.getElementById('name').value = 'A';
+  await ui.run('join');
+  const saved = new Map(f.storage.values);
+  fail = true;
+  await ui.run('sync');
+  assert.equal(document.getElementById('status').attributes.role, 'alert');
+  assert.match(document.getElementById('status').textContent, /STORAGE_ERROR/);
+  assert.equal(document.getElementById('ready').disabled, true);
+  assert.equal(timers.scheduled.size, 0);
+  assert.deepEqual(f.storage.values, saved);
+  f.storage.getItem = read;
+  ui.unmount();
+});
+
+test('unmounted UI ignores explicit actions and saved sessions surface non-client transport errors', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  let fail = false;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: request => {
+      if (fail) throw Error('unexpected browser transport failure');
+      return f.provider.send(request);
+    },
+  });
+  document.getElementById('spreadsheet').value = spreadsheetUrl;
+  document.getElementById('name').value = 'A';
+  await ui.run('join');
+  fail = true;
+  await ui.run('sync');
+  assert.match(document.getElementById('status').textContent, /STORAGE_ERROR/);
+  assert.equal(document.getElementById('session-recovery').hidden, false);
+  ui.unmount();
+  const calls = f.provider.calls.length;
+  await ui.run('sync');
+  assert.equal(f.provider.calls.length, calls);
+});
+
+test('late transport failures after unmount or server selection do not replace current status', async () => {
+  for (const change of ['unmount', 'input', 'value']) {
+    const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+    let reject;
+    const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+      locks: { request: (_, operation) => operation() },
+      send: request => request.action === 'sync'
+        ? new Promise((_, fail) => { reject = fail; }) : f.provider.send(request),
+    });
+    document.getElementById('spreadsheet').value = spreadsheetUrl;
+    document.getElementById('name').value = 'A';
+    await ui.run('join');
+    const pending = ui.run('sync');
+    await settle();
+    if (change === 'unmount') ui.unmount();
+    else {
+      document.getElementById('spreadsheet').value = spreadsheetUrl.replace('s'.repeat(30), 't'.repeat(30));
+      if (change === 'input') document.getElementById('spreadsheet').input();
+    }
+    document.getElementById('status').textContent = 'Current selection';
+    reject(new ClientError('NETWORK_ERROR', 'old request failed'));
+    await pending;
+    assert.doesNotMatch(document.getElementById('status').textContent, /old request failed/);
+    assert.equal(document.getElementById('ready').disabled, true);
+    ui.unmount();
+  }
+});
+
+test('UI polling combines sync/heartbeat, is sequential, backs off, refreshes on focus and stops on leave/unmount', async () => {
+  const f = await fixture(), document = fakeDocument(), events = fakeDocument(), timers = fakeTimers();
+  let inFlight = 0, maximum = 0, fail = false, release;
+  const send = async request => {
+    maximum = Math.max(maximum, ++inFlight);
+    try {
+      if (request.action === 'sync' && release === undefined) await new Promise(resolve => { release = resolve; });
+      if (fail) throw new ClientError('NETWORK_ERROR', 'offline');
+      return await f.provider.send(request);
+    } finally { inFlight--; }
+  };
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, locks: { request: (_, operation) => operation() },
+    events, timers, send });
+  document.getElementById('spreadsheet').value = spreadsheetUrl;
+  document.getElementById('name').value = 'A';
+  events.offline();
+  assert.doesNotMatch(document.getElementById('status').textContent, /OFFLINE/);
+  await ui.run('join');
+  assert.equal(timers.delay, 10000);
+  document.visibilityState = 'hidden';
+  document.visibilitychange();
+  assert.equal(inFlight, 0);
+  events.offline();
+  assert.match(document.getElementById('status').textContent, /OFFLINE/);
+  timers.fire(); await settle();
+  events.focus(); events.focus();
+  assert.equal(inFlight, 1);
+  assert.equal(document.getElementById('ready').disabled, true);
+  release(); await settle();
+  assert.equal(maximum, 1);
+  assert.equal(timers.delay, 0);
+  timers.fire(); await settle();
+  assert.equal(f.provider.calls.at(-1).action, 'sync');
+  assert.equal(timers.delay, 10000);
+  await ui.run('ready');
+  assert.match(document.getElementById('players').children[0].textContent, / - Siap$/);
+  assert.equal(document.getElementById('not-ready').disabled, false);
+  assert.equal(timers.delay, 10000);
+  fail = true;
+  timers.fire(); await settle();
+  assert.equal(timers.delay, 20000);
+  assert.match(document.getElementById('status').textContent, /NETWORK_ERROR.*offline/);
+  assert.equal(document.getElementById('roster').hidden, false);
+  timers.fire(); await settle(); assert.equal(timers.delay, 40000);
+  timers.fire(); await settle(); assert.equal(timers.delay, 60000);
+  fail = false; events.focus(); await settle(); assert.equal(timers.delay, 10000);
+  document.visibilityState = 'visible';
+  document.visibilitychange(); await settle();
+  assert.equal(f.provider.calls.at(-1).action, 'sync');
+  assert.equal(timers.delay, 10000);
+  await ui.run('leave');
+  assert.equal(timers.scheduled.size, 0);
+  events.focus(); await settle(); assert.equal(timers.scheduled.size, 0);
+  ui.unmount();
+  assert.equal(events.focus, undefined);
+  assert.equal(timers.scheduled.size, 0);
+});
+
+test('UI ignores completion after unmount or selection change and expires with clear recovery', async () => {
+  for (const change of ['unmount', 'selection', 'expired']) {
+    const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+    let response, release;
+    const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+      locks: { request: (_, operation) => operation() },
+      send: async request => {
+        if (request.action === 'sync') return new Promise((resolve, reject) => {
+          release = () => change === 'expired' ? reject(new ClientError('SESSION_ENDED', 'Sesi berakhir; daftar lagi.')) : resolve(response);
+        });
+
+        response = await f.provider.send(request); return response;
+      },
+    });
+    document.getElementById('spreadsheet').value = spreadsheetUrl;
+    document.getElementById('name').value = 'A';
+    await ui.run('join');
+    const pending = ui.run('sync'); await settle();
+    if (change === 'unmount') ui.unmount();
+    if (change === 'selection') {
+      document.getElementById('spreadsheet').value = spreadsheetUrl.replace('s'.repeat(30), 't'.repeat(30));
+      document.getElementById('spreadsheet').change();
+    }
+    release(); await pending;
+    assert.equal(timers.scheduled.size, 0);
+    if (change !== 'unmount') assert.equal(document.getElementById('roster').hidden, true);
+    if (change === 'expired') {
+      assert.match(document.getElementById('status').textContent, /SESSION_ENDED/);
+      assert.equal(document.getElementById('join').disabled, false);
+      assert.equal(document.getElementById('ready').disabled, true);
+    }
+    ui.unmount();
+  }
+});
+
+test('refresh resume failure backs off and retries the stored identity without enabling ready early', async () => {
+  const f = await fixture(), timers = fakeTimers(), document = fakeDocument();
+  const joined = await f.client.join('A');
+  f.storage.setItem('game100:endpoint', endpoint);
+  f.storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
+  let fail = true;
+  const ui = mountRegistration(document, {
+    ...f.options, config: {}, timers, locks: { request: (_, operation) => operation() },
+    send: async request => {
+      if (fail) throw new ClientError('NETWORK_ERROR', 'offline');
+      return f.provider.send(request);
+    },
+  });
+  await settle();
+  assert.equal(timers.delay, 20000);
+  assert.equal(document.getElementById('ready').disabled, true);
+  assert.equal(document.getElementById('roster').hidden, true);
+  assert.match(document.getElementById('status').textContent, /NETWORK_ERROR/);
+  fail = false; timers.fire(); await settle();
+  assert.equal(f.provider.calls.at(-1).action, 'sync');
+  assert.equal(f.provider.calls.at(-1).playerId, joined.playerId);
+  assert.equal(document.getElementById('ready').disabled, false);
+  assert.equal(timers.delay, 10000);
+  ui.unmount();
 });
 
 test('new player sees entry fields, not session controls; setup is collapsed in HTML', async () => {
@@ -535,6 +791,118 @@ test('submitting with a saved session resumes rather than joining a second playe
   assert.equal(f.provider.calls.at(-1).action, 'resume');
   assert.equal(f.provider.calls.at(-1).playerId, joined.playerId);
   assert.equal(document.getElementById('leave').hidden, false);
+  ui.unmount();
+});
+
+test('semantic form handles Enter and submit-button activation once, with no join click handler', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  let release, prevented = 0;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: request => new Promise(resolve => { release = () => resolve(f.provider.send(request)); }),
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('name').value = 'A';
+  assert.equal(get('join').click, undefined);
+  const submit = () => get('entry-form').submit({ preventDefault() { prevented++; } });
+  submit();
+  submit();
+  await settle();
+  assert.equal(get('join').disabled, true);
+  release(); await settle();
+  assert.equal(prevented, 2);
+  assert.equal(f.provider.calls.filter(request => request.action === 'join').length, 1);
+  assert.equal(get('leave').hidden, false);
+  assert.equal(get('ready').hidden, false);
+  assert.equal(get('not-ready').hidden, false);
+  ui.unmount();
+  assert.equal(get('entry-form').submit, undefined);
+});
+
+test('ambiguous ready and leave hide action controls until exact recovery without losing polling', async () => {
+  for (const action of ['ready', 'leave']) {
+    const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+    let lost = true;
+    const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+      locks: { request: (_, operation) => operation() },
+      send: async request => {
+        const result = await f.provider.send(request);
+        if (request.action === (action === 'ready' ? 'setReady' : 'leave') && lost) {
+          lost = false;
+          throw new ClientError('NETWORK_ERROR', 'committed but unanswered');
+        }
+        return result;
+      },
+    });
+    const get = id => document.getElementById(id);
+    get('spreadsheet').value = spreadsheetUrl;
+    get('name').value = 'A';
+    await ui.run('join');
+    await ui.run(action);
+    const pending = f.provider.calls.at(-1);
+    assert.equal(get('registration-fields').hidden, true);
+    assert.equal(get('session-recovery').hidden, false);
+    assert.equal(get('leave').hidden, true);
+    assert.equal(get('ready').hidden, true);
+    assert.equal(get('not-ready').hidden, true);
+    assert.equal(timers.delay, 20000);
+    timers.fire(); await settle();
+    assert.deepEqual(f.provider.calls.at(-1), pending);
+    assert.equal(get('session-recovery').hidden, true);
+    assert.equal(get('leave').hidden, action === 'leave');
+    assert.equal(get('registration-fields').hidden, action !== 'leave');
+    if (action === 'leave') {
+      assert.equal(timers.scheduled.size, 0);
+    } else {
+      assert.equal(timers.delay, 10000);
+      assert.equal(get('ready').hidden, false);
+      assert.equal(get('ready').disabled, true);
+      assert.equal(get('not-ready').disabled, false);
+    }
+    ui.unmount();
+  }
+});
+
+test('server selection restores saved-session controls without network, and expiry returns to entry', async () => {
+  const f = await fixture(), document = fakeDocument(), timers = fakeTimers();
+  let expired = false;
+  const ui = mountRegistration(document, { ...f.options, config: { endpoint }, timers,
+    locks: { request: (_, operation) => operation() },
+    send: request => expired
+      ? Promise.reject(new ClientError('SESSION_ENDED', 'Sesi berakhir; daftar lagi.'))
+      : f.provider.send(request),
+  });
+  const get = id => document.getElementById(id);
+  get('spreadsheet').value = spreadsheetUrl; get('name').value = 'A';
+  await ui.run('join');
+  const calls = f.provider.calls.length;
+  get('spreadsheet').value = spreadsheetUrl.replace('s'.repeat(30), 't'.repeat(30));
+  get('spreadsheet').input();
+  assert.equal(timers.scheduled.size, 0);
+  assert.equal(get('ready').hidden, true);
+  get('spreadsheet').value = spreadsheetUrl;
+  get('spreadsheet').change();
+  assert.equal(get('registration-fields').hidden, true);
+  assert.equal(get('name').required, false);
+  assert.equal(get('session-recovery').hidden, false);
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('roster').hidden, true);
+  assert.equal(f.provider.calls.length, calls);
+  assert.equal(timers.scheduled.size, 0);
+  await ui.run('resume');
+  assert.equal(get('leave').hidden, false);
+  expired = true;
+  timers.fire(); await settle();
+  assert.equal(get('registration-fields').hidden, false);
+  assert.equal(get('name').required, true);
+  assert.equal(get('session-recovery').hidden, true);
+  assert.equal(get('leave').hidden, true);
+  assert.equal(get('ready').hidden, true);
+  assert.equal(get('roster').hidden, true);
+  assert.equal(timers.scheduled.size, 0);
+  assert.match(get('status').textContent, /SESSION_ENDED/);
+  ui.unmount();
 });
 
 test('UI rejects browsers without Web Locks before sending a registration command', async () => {
@@ -597,7 +965,10 @@ test('UI ignores a second action while awaiting server confirmation', async () =
   complete();
   await joining;
   assert.deepEqual(f.provider.calls.map(request => request.action), ['initialize', 'join']);
-  assert.equal(document.getElementById('initialize').disabled, false);
+  assert.equal(document.getElementById('initialize').disabled, true);
+  assert.equal(document.getElementById('ready').disabled, false);
+  assert.equal(document.getElementById('leave').hidden, false);
+  ui.unmount();
 });
 
 test('public response strips unexpected secrets, random uses 32 crypto bytes, static assets are relative', async () => {

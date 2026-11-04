@@ -290,4 +290,32 @@ test('deployable build executes actual shared domain and runtime in Apps Script-
   assert.equal(response.data.state.players[0].name, 'A');
   assert.deepEqual(send(request), response);
   assert.equal(send(command('join', { name: 'a', secret: secret(2) })).error.code, 'NAME_TAKEN');
+  const auth = { serverId: response.data.state.serverId, playerId: response.data.playerId, secret: secret(1) };
+  const ready = command('setReady', { ...auth, ready: true, readyVersion: 1 });
+  assert.equal(send(ready).data.state.players[0].ready, true);
+  assert.equal(send(command('sync', auth)).data.state.players[0].ready, true);
+  assert.equal(send(command('setReady', { ...auth, ready: false, readyVersion: 2 })).data.state.players[0].ready, false);
+  assert.equal(send(ready).data.state.players[0].ready, false);
+  assert.equal(send(command('sync', { ...auth, secret: secret(2) })).error.code, 'INVALID_SESSION');
+});
+
+test('script lock serializes ready/leave/heartbeat contention and exact retries', () => {
+  for (const action of ['setReady', 'leave', 'sync']) {
+    const runtime = fakeRuntime();
+    invoke(runtime, command('initialize'));
+    const joined = invoke(runtime, command('join', { name: 'A', secret: secret(1) })).data;
+    const auth = { serverId: joined.state.serverId, playerId: joined.playerId, secret: secret(1) };
+    const first = command('setReady', { ...auth, ready: true, readyVersion: 1 });
+    const competing = command(action, { ...auth, ...(action === 'setReady' ? { ready: false, readyVersion: 2 } : {}) });
+    let collision;
+    runtime.onRead = () => { collision = invoke(runtime, competing); };
+    assert.equal(invoke(runtime, first).ok, true);
+    assert.equal(collision.error.code, 'BUSY');
+    runtime.onRead = undefined;
+    const resolved = invoke(runtime, competing);
+    assert.equal(resolved.ok, true);
+    assert.equal(invoke(runtime, competing).ok, true);
+    assert.equal(resolved.data.state.players.length, action === 'leave' ? 0 : 1);
+    if (action !== 'leave') assert.equal(resolved.data.state.players[0].ready, action === 'sync');
+  }
 });

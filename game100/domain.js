@@ -1,5 +1,6 @@
 export const MAX_PAYLOAD = 48000;
 export const MAX_RETRIES = 32;
+export const LOBBY_TIMEOUT = 60000;
 
 export class GameError extends Error {
   constructor(code, message) {
@@ -47,8 +48,10 @@ export function validateState(state) {
       || !Array.isArray(state.retries) || state.retries.length > MAX_RETRIES) corrupt();
   const names = new Set(), ids = new Set(), secrets = new Set(), requests = new Set();
   for (const player of state.players) {
-    if (!keys(player, playerKeys) || !id(player.id) || !digest(player.secretDigest)
-        || player.ready !== false || !integer(player.lastSeenAt)) corrupt();
+    if (!(keys(player, playerKeys) || keys(player, [...playerKeys, 'readyVersion']))
+        || !id(player.id) || !digest(player.secretDigest)
+        || typeof player.ready !== 'boolean' || !integer(player.lastSeenAt)
+        || (player.readyVersion !== undefined && !integer(player.readyVersion))) corrupt();
     let normalized;
     try { normalized = normalizeName(player.name); } catch { corrupt(); }
     if (normalized.name !== player.name || normalized.nameKey !== player.nameKey
@@ -57,7 +60,7 @@ export function validateState(state) {
   }
   for (const retry of state.retries) {
     if (!keys(retry, retryKeys) || !id(retry.requestId) || !id(retry.playerId)
-        || !['join', 'leave'].includes(retry.action) || !digest(retry.secretDigest)
+        || !['join', 'leave', 'setReady'].includes(retry.action) || !digest(retry.secretDigest)
         || !digest(retry.fingerprint) || requests.has(retry.requestId)) corrupt();
     requests.add(retry.requestId);
     const active = state.players.find(player => player.id === retry.playerId);
@@ -79,7 +82,7 @@ export function publicState(state) {
   return {
     schemaVersion: state.schemaVersion, serverId: state.serverId,
     revision: state.revision, phase: state.phase,
-    players: state.players.map(({ id, name, ready, lastSeenAt }) => ({ id, name, ready, lastSeenAt })),
+    players: state.players.map(({ id, name, ready, lastSeenAt, readyVersion = 0 }) => ({ id, name, ready, lastSeenAt, readyVersion })),
   };
 }
 
@@ -87,53 +90,111 @@ export function publicState(state) {
 export function applyCommand(previous, command, { hash, uuid, now }) {
   requireValue(command && typeof command === 'object' && !Array.isArray(command), 'INVALID_REQUEST', 'Perintah tidak valid.');
   const { action, requestId } = command;
-  requireValue(['initialize', 'join', 'resume', 'leave'].includes(action) && id(requestId),
+  requireValue(['initialize', 'join', 'resume', 'leave', 'sync', 'setReady'].includes(action) && id(requestId),
     'INVALID_REQUEST', 'Aksi atau requestId tidak valid.');
-  const allowed = ['action', 'requestId', 'spreadsheetUrl', 'secret', 'name', 'serverId', 'playerId'];
+  const allowed = ['action', 'requestId', 'spreadsheetUrl', 'secret', 'name', 'serverId', 'playerId', 'ready', 'readyVersion'];
   requireValue(Object.keys(command).every(key => allowed.includes(key)), 'INVALID_REQUEST', 'Field perintah tidak dikenal.');
+  requireValue(action === 'setReady'
+    ? typeof command.ready === 'boolean' && integer(command.readyVersion) && command.readyVersion > 0
+    : command.ready === undefined && command.readyVersion === undefined,
+  'INVALID_REQUEST', 'Ready harus boolean dengan versi keputusan positif.');
   let state = previous === null ? null : validateState(JSON.parse(JSON.stringify(previous)));
-  if (action === 'initialize') {
-    if (state) return { state, changed: false, result: { state: publicState(state) } };
+  if (action === 'initialize' && !state) {
     state = { schemaVersion: 1, serverId: uuid(), revision: 0, phase: 'lobby', players: [], retries: [] };
     validateState(state);
     return { state, changed: true, result: { state: publicState(state) } };
   }
   requireValue(state, 'NOT_INITIALIZED', 'Server belum diinisialisasi.');
+  const timestamp = now();
+  requireValue(integer(timestamp), 'INVALID_TIME', 'Waktu server tidak valid.');
+  let changed = false;
+  function finish(result, error) {
+    if (changed) {
+      requireValue(state.revision < Number.MAX_SAFE_INTEGER, 'REVISION_LIMIT', 'Batas revisi tercapai.');
+      state.revision++;
+    }
+    validateState(state);
+    return { state, changed, ...(error ? { error } : { result: { ...result, state: publicState(state) } }) };
+  }
+  function cleanup() {
+    // Future phases must opt in explicitly; lobby expiry never applies to a game.
+    if (state.phase !== 'lobby') return;
+    const remaining = state.players.filter(player => timestamp - player.lastSeenAt < LOBBY_TIMEOUT);
+    if (remaining.length === state.players.length) return;
+    state.players = remaining;
+    for (const player of remaining) {
+      requireValue((player.readyVersion ?? 0) < Number.MAX_SAFE_INTEGER, 'REVISION_LIMIT', 'Batas keputusan ready tercapai.');
+      player.ready = false;
+      player.readyVersion = (player.readyVersion ?? 0) + 1;
+    }
+    changed = true;
+  }
+  if (action === 'initialize') {
+    cleanup();
+    return finish({});
+  }
   requireValue(command.serverId === undefined || command.serverId === state.serverId,
     'SERVER_CHANGED', 'Identitas server berubah.');
   requireValue(digest(command.secret),
     'INVALID_SESSION', 'Kredensial sesi tidak valid.');
   const secretDigest = hash(command.secret);
   const normalized = action === 'join' ? normalizeName(command.name) : null;
-  const fingerprint = hash(JSON.stringify([action, normalized?.name ?? null, command.playerId ?? null, command.serverId ?? null]));
+  const fingerprint = hash(JSON.stringify([action, normalized?.name ?? null, command.playerId ?? null,
+    command.serverId ?? null, ...(action === 'setReady' ? [command.ready, command.readyVersion] : [])]));
   const retry = state.retries.find(item => item.requestId === requestId);
   if (retry) {
     requireValue(retry.secretDigest === secretDigest && retry.fingerprint === fingerprint,
       'REQUEST_CONFLICT', 'requestId sudah dipakai untuk perintah lain.');
-    requireValue(action === 'leave' || state.players.some(player => player.id === retry.playerId),
-      'SESSION_ENDED', 'Sesi telah berakhir.');
-    return { state, changed: false, result: { state: publicState(state), playerId: retry.playerId, left: action === 'leave' } };
   }
   let player = state.players.find(item => item.secretDigest === secretDigest);
-  if (action === 'join') {
-    if (player) {
-      requireValue(player.nameKey === normalized.nameKey, 'SESSION_EXISTS', 'Sesi ini sudah memakai nama lain.');
-      return { state, changed: false, result: { state: publicState(state), playerId: player.id, left: false } };
-    }
-    requireValue(!state.players.some(item => item.nameKey === normalized.nameKey), 'NAME_TAKEN', 'Nama sudah dipakai di server ini.');
-    requireValue(state.players.length < 4, 'SERVER_FULL', 'Server penuh (maksimal 4 pemain).');
-    player = { id: uuid(), ...normalized, secretDigest, ready: false, lastSeenAt: now() };
-    state.players.push(player);
-  } else {
+  if (action !== 'join' && !(retry && action === 'leave')) {
     requireValue(command.serverId === state.serverId && player && player.id === command.playerId,
       'INVALID_SESSION', 'Sesi tidak ditemukan atau kredensial salah.');
-    if (action === 'resume') return { state, changed: false, result: { state: publicState(state), playerId: player.id, left: false } };
-    state.players = state.players.filter(item => item.id !== player.id);
   }
-  requireValue(state.revision < Number.MAX_SAFE_INTEGER, 'REVISION_LIMIT', 'Batas revisi tercapai.');
-  state.revision++;
-  state.retries.push({ requestId, action, secretDigest, fingerprint, playerId: player.id });
-  state.retries = state.retries.slice(-MAX_RETRIES);
-  validateState(state);
-  return { state, changed: true, result: { state: publicState(state), playerId: player.id, left: action === 'leave' } };
+  cleanup();
+  try {
+    if (retry) {
+      requireValue(action === 'leave' || state.players.some(item => item.id === retry.playerId),
+        'SESSION_ENDED', 'Sesi berakhir setelah 60 detik tanpa heartbeat. Silakan daftar lagi.');
+      return finish({ playerId: retry.playerId, left: action === 'leave' });
+    }
+    requireValue(!player || state.players.includes(player), 'SESSION_ENDED',
+      'Sesi berakhir setelah 60 detik tanpa heartbeat. Silakan daftar lagi.');
+    if (action === 'join') {
+      if (player) {
+        requireValue(player.nameKey === normalized.nameKey, 'SESSION_EXISTS', 'Sesi ini sudah memakai nama lain.');
+        return finish({ playerId: player.id, left: false });
+      }
+      requireValue(!state.players.some(item => item.nameKey === normalized.nameKey), 'NAME_TAKEN', 'Nama sudah dipakai di server ini.');
+      requireValue(state.players.length < 4, 'SERVER_FULL', 'Server penuh (maksimal 4 pemain).');
+      player = { id: uuid(), ...normalized, secretDigest, ready: false, readyVersion: 0, lastSeenAt: timestamp };
+      state.players.push(player);
+      changed = true;
+    } else {
+      if (action === 'leave') {
+        state.players = state.players.filter(item => item.id !== player.id);
+        changed = true;
+      } else {
+        if (action === 'setReady') {
+          const version = player.readyVersion ?? 0;
+          requireValue(command.readyVersion <= version + 1, 'INVALID_REQUEST', 'Versi ready harus berurutan; sinkronkan sesi.');
+          if (command.readyVersion > version) {
+            player.ready = command.ready;
+            player.readyVersion = command.readyVersion;
+            changed = true;
+          }
+        }
+        if (timestamp > player.lastSeenAt) { player.lastSeenAt = timestamp; changed = true; }
+        if (action !== 'setReady') return finish({ playerId: player.id, left: false });
+      }
+    }
+    state.retries.push({ requestId, action, secretDigest, fingerprint, playerId: player.id });
+    state.retries = state.retries.slice(-MAX_RETRIES);
+    changed = true;
+    return finish({ playerId: player.id, left: action === 'leave' });
+  } catch (error) {
+    // Cleanup must survive a valid request whose player expired or join was rejected.
+    if (!(error instanceof GameError) || !changed) throw error;
+    return finish(null, { code: error.code, message: error.message });
+  }
 }

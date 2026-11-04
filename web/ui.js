@@ -5,20 +5,74 @@ export function renderRoster(document, result) {
   list.replaceChildren();
   for (const player of result.state.players) {
     const item = document.createElement('li');
-    item.textContent = `${player.name}${player.id === result.playerId && !result.left ? ' (Anda)' : ''}`;
+    item.textContent = `${player.name}${player.id === result.playerId && !result.left ? ' (Anda)' : ''} - ${player.ready ? 'Siap' : 'Belum siap'}`;
     list.append(item);
   }
   document.getElementById('roster').hidden = false;
-  document.getElementById('server').textContent = `Server ${result.state.serverId} - ${result.state.players.length}/4 pemain`;
+  document.getElementById('server').textContent = `Server ${result.state.serverId} - ${result.state.players.length}/4 pemain (minimum 2)`;
 }
 
-export function mountRegistration(document, { storage, config, locks, send, random }) {
+export function mountRegistration(document, {
+  storage, config, locks, send, random, events = document.defaultView,
+  timers = globalThis,
+}) {
   const get = id => document.getElementById(id);
-  const buttons = ['initialize', 'join', 'resume', 'leave'];
-  let busy = false;
-  let confirmedKey = null;
-  let displayedKey = null;
-  let selectedKey = null;
+  const buttons = ['initialize', 'join', 'resume', 'leave', 'ready', 'not-ready'];
+  let busy = false, stopped = false, active = false, recovering = false, latest = null;
+  let timer, failures = 0, refreshRequested = false, api, apiKey, apiSelection, generation = 0;
+  let selectedKey = null, displayedKey = null;
+  const selected = () => `${get('endpoint').value.trim()}\n${get('spreadsheet').value.trim()}`;
+  const listeners = [];
+  function listen(element, event, callback) {
+    element?.addEventListener(event, callback);
+    listeners.push(() => element?.removeEventListener?.(event, callback));
+  }
+  function cancelTimer() {
+    if (timer !== undefined) timers.clearTimeout(timer);
+    timer = undefined;
+  }
+  function showError(error) {
+    get('status').setAttribute('role', 'alert');
+    get('status').textContent = error instanceof ClientError
+      ? `${error.code}: ${error.message}` : 'STORAGE_ERROR: Operasi browser gagal; sesi tidak dihapus. Periksa penyimpanan browser.';
+  }
+  function controls() {
+    let saved = false, key = null, selectionError = false;
+    try {
+      const current = client();
+      key = current.lockKey;
+      saved = current.hasSession();
+    } catch (error) {
+      // Incomplete entry fields are normal; storage failures must stay visible.
+      if (!(error instanceof ClientError)
+          || !['NOT_CONFIGURED', 'INVALID_ENDPOINT', 'INVALID_URL'].includes(error.code)) {
+        selectionError = true;
+        showError(error);
+      }
+    }
+    const confirmed = saved && active && !busy && key === displayedKey;
+    if (key !== selectedKey && !busy && !selectionError) {
+      get('status').setAttribute('role', 'status');
+      get('status').textContent = saved && !confirmed
+        ? 'Sesi tersimpan ditemukan. Pulihkan sesi untuk melanjutkan.'
+        : 'Masukkan tautan spreadsheet dan nama untuk bergabung.';
+    }
+    selectedKey = key;
+    get('registration-fields').hidden = saved;
+    get('name').required = !saved;
+    get('session-recovery').hidden = !saved || confirmed;
+    get('roster').hidden = key === null || displayedKey !== key;
+    for (const id of ['leave', 'ready', 'not-ready']) get(id).hidden = !confirmed;
+    for (const id of buttons) get(id).disabled = busy
+      || (['ready', 'not-ready', 'leave'].includes(id) && !confirmed)
+      || (['initialize', 'join'].includes(id) && saved);
+    for (const id of ['endpoint', 'spreadsheet', 'name']) get(id).disabled = busy;
+    const own = latest?.state.players.find(player => player.id === latest.playerId);
+    if (own) {
+      get('ready').disabled ||= own.ready;
+      get('not-ready').disabled ||= !own.ready;
+    }
+  }
   try {
     get('endpoint').value = config.endpoint || storage.getItem('game100:endpoint') || '';
     get('spreadsheet').value = storage.getItem('game100:lastSpreadsheet') || '';
@@ -32,96 +86,141 @@ export function mountRegistration(document, { storage, config, locks, send, rand
     const spreadsheetUrl = get('spreadsheet').value.trim();
     const spreadsheet = sheetId(spreadsheetUrl);
     if (remember) {
-      storage.setItem('game100:endpoint', endpoint);
-      storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
-    }
-    return createRegistrationClient({
-      endpoint, spreadsheetUrl, storage, send, random,
-      exclusive: operation => {
-        if (!locks?.request) throw new ClientError('BROWSER_UNSUPPORTED', 'Browser harus mendukung Web Locks pada HTTPS agar sesi antartab aman.');
-        return locks.request(`game100:${endpoint}:${spreadsheet}`, operation);
-      },
-    });
-  }
-  function showError(error) {
-    get('status').setAttribute('role', 'alert');
-    get('status').textContent = error instanceof ClientError
-      ? `${error.code}: ${error.message}` : 'STORAGE_ERROR: Operasi browser gagal; sesi tidak dihapus. Periksa penyimpanan browser.';
-  }
-  function syncControls() {
-    let saved = false, key = null, selectionError = false;
-    try {
-      const api = client();
-      key = api.lockKey;
-      saved = api.hasSession();
-    } catch (error) {
-      // Incomplete fields are normal while choosing a server; corrupt storage is not.
-      if (!(error instanceof ClientError)
-          || !['NOT_CONFIGURED', 'INVALID_ENDPOINT', 'INVALID_URL'].includes(error.code)) {
-        selectionError = true;
-        showError(error);
+      try {
+        storage.setItem('game100:endpoint', endpoint);
+        storage.setItem('game100:lastSpreadsheet', spreadsheetUrl);
+      } catch {
+        throw new ClientError('STORAGE_ERROR', 'Penyimpanan browser gagal; periksa izin dan quota penyimpanan.');
       }
     }
-    const confirmed = saved && key !== null && confirmedKey === key;
-    if (key !== selectedKey && !busy && !selectionError) {
-      get('status').setAttribute('role', 'status');
-      get('status').textContent = saved && !confirmed
-        ? 'Sesi tersimpan ditemukan. Pulihkan sesi untuk melanjutkan.'
-        : 'Masukkan tautan spreadsheet dan nama untuk bergabung.';
+    const key = `${endpoint}:${spreadsheet}`;
+    if (!api || apiKey !== key) {
+      apiKey = key;
+      api = createRegistrationClient({
+        endpoint, spreadsheetUrl, storage, send, random,
+        exclusive: operation => {
+          if (!locks?.request) throw new ClientError('BROWSER_UNSUPPORTED', 'Browser harus mendukung Web Locks pada HTTPS agar sesi antartab aman.');
+          return locks.request(`game100:${endpoint}:${spreadsheet}`, operation);
+        },
+      });
     }
-    selectedKey = key;
-    get('registration-fields').hidden = saved;
-    get('name').required = !saved;
-    get('session-recovery').hidden = !saved || confirmed;
-    get('leave').hidden = !confirmed;
-    get('roster').hidden = key === null || displayedKey !== key;
-    for (const id of buttons) get(id).disabled = busy;
-    for (const id of ['endpoint', 'spreadsheet', 'name']) get(id).disabled = busy;
+    return api;
+  }
+  function schedule(delay) {
+    cancelTimer();
+    if (stopped || (!active && !recovering)) return;
+    timer = timers.setTimeout(() => { timer = undefined; void run('sync'); }, delay);
+    timer?.unref?.();
   }
   async function run(action) {
-    if (busy) return;
+    if (stopped) return;
+    if (busy) {
+      if (action === 'sync') refreshRequested = true;
+      return;
+    }
+    cancelTimer();
+    const selection = selected();
+    const epoch = generation;
+    if (apiKey && selection !== apiSelection) {
+      latest = null; displayedKey = null; active = false; recovering = false;
+    }
     busy = true;
-    confirmedKey = null;
-    displayedKey = null;
-    syncControls();
+    active = false;
+    controls();
     get('status').setAttribute('role', 'status');
     get('status').textContent = 'Menghubungi server...';
+    let current;
     try {
-      const api = client(true);
-      if (action === 'join' && api.hasSession()) action = 'resume';
-      const result = action === 'join' ? await api.join(get('name').value) : await api[action]();
+      current = client(true);
+      apiSelection = selection;
+      if (action === 'join' && current.hasSession()) action = 'resume';
+      recovering = current.hasSession();
+      const result = action === 'join' ? await current.join(get('name').value)
+        : action === 'ready' || action === 'not-ready' ? await current.setReady(action === 'ready')
+          : await current[action]();
+      if (stopped || epoch !== generation || selection !== selected()) return;
+      if (latest && result.state.serverId !== latest.state.serverId) {
+        throw new ClientError('SERVER_CHANGED', 'Server berubah; pulihkan sesi sebelum melanjutkan.');
+      }
+      if (latest && result.state.revision < latest.state.revision) {
+        throw new ClientError('STALE_RESPONSE', 'Respons lama diabaikan; sinkronisasi akan diulang.');
+      }
+      latest = result;
+      displayedKey = current.lockKey;
+      recovering = false;
+      active = action !== 'initialize' && current.hasSession() && !result.left;
+      failures = 0;
       renderRoster(document, result);
-      displayedKey = api.lockKey;
-      if (result.playerId && !result.left) confirmedKey = api.lockKey;
       get('status').textContent = action === 'initialize' ? 'Server dikonfirmasi. Anda belum terdaftar.'
-        : result.left ? 'Keluar dikonfirmasi server.' : 'Registrasi/sesi dikonfirmasi server. Belum ada permainan pada tahap ini.';
+        : result.left ? 'Keluar dikonfirmasi server.'
+          : 'Lobby tersinkron dan sesi dikonfirmasi. Semua siap tetap menunggu di lobby; permainan belum tersedia.';
     } catch (error) {
+      if (stopped || epoch !== generation || selection !== selected()) return;
+      failures++;
+      try { recovering = current?.hasSession() ?? false; } catch (storageError) {
+        recovering = false;
+        error = storageError;
+      }
+      if (['SESSION_ENDED', 'INVALID_SESSION', 'SERVER_CHANGED', 'NO_SESSION'].includes(error.code)) {
+        recovering = false;
+        latest = null;
+        displayedKey = null;
+      }
       showError(error);
+      if (recovering) get('status').textContent += ' Data terakhir mungkin lama; pulihkan sesi atau tunggu sinkronisasi ulang.';
+      if (['SESSION_ENDED', 'INVALID_SESSION', 'SERVER_CHANGED', 'NO_SESSION'].includes(error.code)) {
+        get('status').textContent += ' Sesi tidak aktif. Silakan daftar lagi.';
+      }
       if (error instanceof ClientError && error.code === 'NOT_INITIALIZED') {
         get('status').textContent += ' Minta pengelola menginisialisasi server melalui Penyiapan server.';
       }
     } finally {
       busy = false;
-      syncControls();
+      if (!stopped) {
+        controls();
+        const immediate = refreshRequested && failures === 0;
+        refreshRequested = false;
+        schedule(immediate ? 0 : Math.min(60000, 10000 * 2 ** Math.min(failures, 3)));
+      }
     }
   }
-  get('entry-form').addEventListener('submit', event => {
+  listen(get('entry-form'), 'submit', event => {
     event.preventDefault();
     void run('join');
   });
-  for (const action of buttons.filter(action => action !== 'join')) {
-    get(action).addEventListener('click', () => run(action));
+  for (const action of buttons.filter(action => action !== 'join')) listen(get(action), 'click', () => run(action));
+  function selectionChanged() {
+    cancelTimer();
+    generation++;
+    failures = 0; refreshRequested = false;
+    active = false; recovering = false; latest = null; displayedKey = null; api = null; apiKey = null;
+    controls();
   }
-  for (const id of ['spreadsheet', 'endpoint']) {
-    get(id).addEventListener('input', syncControls);
-    get(id).addEventListener('change', syncControls);
+  for (const id of ['endpoint', 'spreadsheet']) {
+    listen(get(id), 'input', selectionChanged);
+    listen(get(id), 'change', selectionChanged);
   }
-  syncControls();
-  // A refresh restores the selected server, never creates a fresh identity.
+  const refresh = () => { if ((active || recovering) && !stopped) void run('sync'); };
+  listen(events, 'focus', refresh);
+  listen(events, 'online', refresh);
+  listen(events, 'offline', () => {
+    if ((!active && !recovering) || stopped) return;
+    get('status').setAttribute('role', 'alert');
+    get('status').textContent = 'OFFLINE: Browser tidak terhubung. Data mungkin lama; sesi dapat berakhir setelah 60 detik tanpa heartbeat.';
+  });
+  listen(document, 'visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
+  controls();
   if (get('endpoint').value && get('spreadsheet').value) {
-    try { if (client().hasSession()) void run('resume'); } catch (error) {
-      get('status').textContent = error instanceof ClientError ? error.message : 'Penyimpanan browser gagal dibaca.';
-    }
+    try { if (client().hasSession()) void run('resume'); } catch (error) { showError(error); }
   }
-  return { run };
+  return {
+    run,
+    unmount() {
+      stopped = true;
+      active = false;
+      recovering = false;
+      cancelTimer();
+      for (const remove of listeners) remove();
+    },
+  };
 }
