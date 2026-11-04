@@ -114,9 +114,26 @@ Penulisan lewat API tidak menjalankan trigger `onEdit` Google Apps Script.
 
 ```sh
 npm test
+npm run test:coverage
 npm run check
 ```
 
 Test memakai Node test runner dan fake Fetch/adapter, tanpa credential atau akses
-jaringan. Integrasi dengan akun Google sungguhan memerlukan token dan spreadsheet
-uji sendiri; tidak disertakan atau diasumsikan tersedia.
+jaringan. `test:coverage` melaporkan coverage kode library, aplikasi, entry point,
+dan tooling dengan ambang 100% line dan branch coverage yang juga dijalankan di CI. File test
+dan artifact hasil build tidak dihitung sebagai kode produksi. Pemetaan seluruh
+file JavaScript ke suite pengujian ada di
+[dokumentasi registrasi](docs/registration.md#cakupan-unit-test-javascript).
+Integrasi dengan akun Google sungguhan memerlukan token dan spreadsheet uji
+sendiri; tidak disertakan atau diasumsikan tersedia.
+
+## Aplikasi Kartu 100 (registrasi)
+
+Selain library yang API-nya tetap sama, repo ini menyediakan frontend statis
+`web/` untuk GitHub Pages dan backend standalone Google Apps Script di
+`apps-script/`, dengan domain bersama di `game100/`. Petunjuk setup akun game,
+sharing spreadsheet, build/deploy, kontrak API untuk layer lobby, batas keamanan,
+dan prasyarat smoke test live ada di
+[dokumentasi registrasi](https://github.com/reiva5/lite-board-game/blob/main/docs/registration.md).
+Deployment Google dan Pages **belum diverifikasi live**; lihat blocker di dokumen
+tersebut. Layer ini tidak mengimplementasikan ready, timeout, atau game.
