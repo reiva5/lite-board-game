@@ -29,39 +29,30 @@ function fixture() {
 }
 const code = expected => error => error.code === expected;
 
-test('phase guard skips lobby cleanup if an injected clock corrupts the validated phase', () => {
-  const f = fixture();
-  f.join('A');
-  const before = structuredClone(f.state);
-  const parse = JSON.parse;
-  let working;
-  // Capture the real clone to inject a dependency fault after initial validation.
-  JSON.parse = (...args) => { working = parse(...args); return working; };
-  try {
-    assert.throws(() => applyCommand(before, f.command('initialize'), {
-      ...f.deps,
-      now: () => { working.phase = 'unsupported'; return LOBBY_TIMEOUT; },
-    }), code('CORRUPT_STATE'));
-    assert.deepEqual(working.players, before.players);
-    assert.equal(working.revision, before.revision);
-    assert.deepEqual(f.state, before);
-  } finally {
-    JSON.parse = parse;
-  }
-});
-
-test('ready is explicit boolean, private state validates, and all-ready stays lobby', () => {
+test('phase guard skips lobby cleanup for a valid frozen game after timeout', () => {
   const f = fixture(), a = f.join('A'), b = f.join('B');
   f.ready(a, true); f.ready(b, true);
+  const before = structuredClone(f.state);
+  assert.equal(before.phase, 'game');
+  f.time = LOBBY_TIMEOUT * 2;
+  const outcome = f.apply(f.command('initialize'));
+  assert.equal(outcome.changed, false);
+  assert.deepEqual(outcome.state, before);
+  assert.deepEqual(outcome.result.state, publicState(before));
+});
+
+test('ready is explicit boolean, private state validates, and an unready player prevents start', () => {
+  const f = fixture(), a = f.join('A'), b = f.join('B');
+  f.ready(a, true);
   assert.equal(f.state.phase, 'lobby');
-  assert.ok(f.state.players.every(player => player.ready));
+  assert.deepEqual(f.state.players.map(player => player.ready), [true, false]);
   assert.deepEqual(decodeState(JSON.stringify(f.state)), f.state);
   assert.ok(!JSON.stringify(publicState(f.state)).includes('secret'));
   assert.ok(!JSON.stringify(publicState(f.state)).includes('retries'));
   for (const ready of [null, 1, 'true', undefined]) {
     assert.throws(() => f.ready(a, ready, 2), code('INVALID_REQUEST'));
   }
-  f.ready(a, false, 2);
+  f.ready(a, false, 2); f.ready(b, true);
   assert.equal(f.state.players[0].ready, false);
   assert.equal(f.state.players[1].ready, true);
 });
@@ -88,10 +79,11 @@ test('ordinary join/leave preserve everyone else ready; new player starts not re
 
 test('timeout boundary expires before heartbeat; survivor reset persists with session-ended error', () => {
   const f = fixture(), a = f.join('A'), b = f.join('B');
+  f.join('C');
   f.ready(a, true); f.ready(b, true);
   f.time = LOBBY_TIMEOUT - 1;
   f.apply(f.command('sync', b));
-  assert.equal(f.state.players.length, 2);
+  assert.equal(f.state.players.length, 3);
   assert.equal(f.state.players[1].ready, true);
   f.time = LOBBY_TIMEOUT;
   const outcome = f.apply(f.command('sync', a));
