@@ -100,10 +100,24 @@ revision/identity/selection guards, serta unmount tetap berlaku. Tidak ada
 keputusan client berdasarkan menghitung ready. Snapshot phase game merender
 placeholder berbahasa Indonesia dengan heading yang accessible, ID game dan
 nama peserta tetap melalui textContent. Tidak ada kartu palsu atau janji
-permainan sudah playable. Tombol join/ready/not-ready/leave dinonaktifkan dan
-handler-nya dihambat saat snapshot game sudah diketahui. Resume/sync tetap
+permainan sudah playable. Tombol ready/not-ready/leave tersembunyi dan
+dinonaktifkan, serta handler-nya dihambat saat snapshot game sudah diketahui.
+Form nama/join juga tersembunyi untuk peserta tersimpan maupun snapshot game
+yang dibaca melalui initialize tanpa identitas; name.required dimatikan agar
+input tersembunyi tidak menghalangi validasi browser. Resume/sync tetap
 tersedia; refresh memuat sesi yang sama. Respons lobby lama tidak mengganti
 game baru. Aset tetap relatif untuk `/lite-board-game/`.
+
+UX registrasi sederhana dari parent lobby memakai satu semantic submit
+entry-form (preventDefault, tanpa listener click join). `run('join')` untuk
+identitas tersimpan diarahkan ke resume, termasuk game; bukan pendaftaran
+pemain kedua. Endpoint/init tetap dalam details#setup yang tertutup.
+session-recovery hanya muncul bila identitas tersimpan belum terkonfirmasi,
+termasuk setelah error ambigu atau GAME_STARTED sebelum sync. Ready/leave tidak
+terlihat saat busy/error dan tidak pernah muncul kembali untuk fase game.
+Input/change pilihan server membatalkan generasi respons/roster/timer tanpa
+request jaringan; memilih ulang server game tersimpan hanya menunjukkan
+pemulihan, sedangkan refresh halaman tetap auto-resume.
 
 ## Verifikasi dan blocker deployment
 
