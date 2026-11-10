@@ -25,7 +25,7 @@ export function validateResult(data, action) {
   const state = data?.state;
   if (!state || state.schemaVersion !== 1 || !validId(state.serverId)
       || !Number.isSafeInteger(state.revision) || state.revision < 0 || !['lobby', 'game'].includes(state.phase)
-      || !Array.isArray(state.players) || state.players.length > 4
+      || !Array.isArray(state.players) || state.players.length > 6
       || state.players.some(player => !player || typeof player !== 'object'
         || !validId(player.id) || typeof player.name !== 'string'
         || !player.name.trim() || player.name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(player.name)
@@ -37,10 +37,15 @@ export function validateResult(data, action) {
         || state.players.length < 2 || !state.players.every(player => player.ready)
         || !Array.isArray(state.participantIds) || state.participantIds.length !== state.players.length
         || state.participantIds.some((value, index) => value !== state.players[index].id))
-        : ['gameId', 'participantIds', 'startedAt'].some(key => Object.hasOwn(state, key)))
+        : ['gameId', 'participantIds', 'startedAt', 'round'].some(key => Object.hasOwn(state, key)))
       || (action !== 'initialize' && (!validId(data.playerId) || data.left !== (action === 'leave')
         || (action !== 'leave' && !state.players.some(player => player.id === data.playerId))))) {
     throw new ClientError('INVALID_RESPONSE', 'Bentuk respons server tidak valid.');
+  }
+  let round;
+  if (state.round !== undefined) {
+    try { round = roundSnapshot(state.round, state.participantIds, action === 'initialize' ? undefined : data.playerId); }
+    catch { throw new ClientError('INVALID_RESPONSE', 'Snapshot ronde server tidak valid.'); }
   }
   // Return only the public contract, never persist unexpected provider fields.
   return {
@@ -49,6 +54,7 @@ export function validateResult(data, action) {
       players: state.players.map(({ id, name, ready, lastSeenAt, readyVersion = 0 }) => ({ id, name, ready, lastSeenAt, readyVersion })),
       ...(state.phase === 'game' ? {
         gameId: state.gameId, participantIds: [...state.participantIds], startedAt: state.startedAt,
+        ...(round === undefined ? {} : { round }),
       } : {}),
     },
     ...(action === 'initialize' ? {} : { playerId: data.playerId, left: data.left }),
@@ -116,14 +122,20 @@ export function createRegistrationClient({
         || (!session.pending && (!session.serverId || !session.playerId))
         || (session.readyVersion !== undefined && (!Number.isSafeInteger(session.readyVersion) || session.readyVersion < 0))
         || (session.revision !== undefined && (!Number.isSafeInteger(session.revision) || session.revision < 0))
-        || (session.pending && (!['join', 'leave', 'setReady'].includes(session.pending.action)
+        || (session.turnNumber !== undefined && (!Number.isSafeInteger(session.turnNumber) || session.turnNumber < 0))
+        || (session.gameId !== undefined && !validId(session.gameId))
+        || (session.pending && (!['join', 'leave', 'setReady', 'playCard'].includes(session.pending.action)
           || !validId(session.pending.requestId)
           || session.pending.secret !== session.secret || session.pending.spreadsheetUrl !== canonicalUrl
           || (session.pending.action === 'join' && typeof session.pending.name !== 'string')
           || (session.pending.action !== 'join' && (session.pending.serverId !== session.serverId
             || session.pending.playerId !== session.playerId || !session.playerId))
           || (session.pending.action === 'setReady' && (typeof session.pending.ready !== 'boolean'
-            || !Number.isSafeInteger(session.pending.readyVersion) || session.pending.readyVersion < 1))))) {
+            || !Number.isSafeInteger(session.pending.readyVersion) || session.pending.readyVersion < 1))
+          || (session.pending.action === 'playCard' && (!validId(session.pending.gameId)
+            || !Number.isSafeInteger(session.pending.turnNumber) || session.pending.turnNumber < 0
+            || typeof session.pending.card !== 'string' || !/^(A|[2-9]|10|J|Q|K)[SHDC]$/.test(session.pending.card)
+            || !Number.isSafeInteger(session.pending.choice)))))) {
       throw new ClientError('STORAGE_ERROR', 'Struktur sesi browser tidak valid.');
     }
     return session;
@@ -151,7 +163,10 @@ export function createRegistrationClient({
         throw new ClientError('STALE_RESPONSE', 'Respons revisi lama diabaikan; ulangi sinkronisasi.');
       }
     } catch (error) {
-      if (error instanceof ClientError && error.code === 'GAME_STARTED' && unchanged(session)) {
+      if (error instanceof ClientError && (error.code === 'GAME_STARTED'
+          || (command.action === 'playCard' && ['GAME_CHANGED', 'GAME_UPGRADE_REQUIRED', 'GAME_NOT_STARTED',
+            'NOT_YOUR_TURN', 'STALE_TURN', 'GAME_FINISHED', 'INVALID_MOVE'].includes(error.code)))
+          && unchanged(session)) {
         if (session.playerId) {
           // A terminal lobby command rejection is not an invalidated game identity.
           const { pending, ...identity } = session;
@@ -181,6 +196,9 @@ export function createRegistrationClient({
     } else {
       save({ secret: session.secret, serverId: result.state.serverId, playerId: result.playerId,
         revision: result.state.revision,
+        ...(result.state.round === undefined ? {} : {
+          gameId: result.state.gameId, turnNumber: result.state.round.turnNumber,
+        }),
         readyVersion: result.state.players.find(player => player.id === result.playerId).readyVersion });
     }
     return result;
@@ -237,7 +255,29 @@ export function createRegistrationClient({
       save(session);
       return execute(session, session.pending);
     }),
+    playCard: (card, choice, expected) => serial(async () => {
+      if (typeof card !== 'string' || !/^(A|[2-9]|10|J|Q|K)[SHDC]$/.test(card)
+          || !Number.isSafeInteger(choice)) throw new ClientError('INVALID_MOVE', 'Kartu atau pilihan nilai tidak valid.');
+      const session = load();
+      if (!session) throw new ClientError('NO_SESSION', 'Tidak ada sesi tersimpan.');
+      if (session.pending) throw new ClientError('PENDING_COMMAND', 'Pulihkan perintah tertunda sebelum memainkan kartu.');
+      if (session.gameId === undefined || session.turnNumber === undefined) {
+        throw new ClientError('GAME_NOT_STARTED', 'Sinkronkan ronde sebelum memainkan kartu.');
+      }
+      if (expected !== undefined && (!expected || expected.gameId !== session.gameId
+          || expected.turnNumber !== session.turnNumber)) {
+        throw new ClientError('STALE_TURN', 'Tampilan giliran sudah lama; sinkronkan sebelum memainkan kartu.');
+      }
+      session.pending = {
+        action: 'playCard', card, choice, gameId: session.gameId, turnNumber: session.turnNumber,
+        requestId: random(), spreadsheetUrl: canonicalUrl,
+        secret: session.secret, serverId: session.serverId, playerId: session.playerId,
+      };
+      save(session);
+      return execute(session, session.pending);
+    }),
     hasSession: () => load() !== null,
     lockKey: key,
   };
 }
+import { roundSnapshot } from './game.js';

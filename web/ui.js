@@ -1,15 +1,17 @@
 import { createRegistrationClient, ClientError, endpointUrl, sheetId } from './client.js';
+import { renderRound } from './game.js';
 
 export function renderRoster(document, result) {
   const list = document.getElementById('players');
   list.replaceChildren();
   for (const player of result.state.players) {
     const item = document.createElement('li');
-    item.textContent = `${player.name}${player.id === result.playerId && !result.left ? ' (Anda)' : ''} - ${player.ready ? 'Siap' : 'Belum siap'}`;
+    const roundPlayer = result.state.round?.players.find(item => item.playerId === player.id);
+    item.textContent = `${player.name}${player.id === result.playerId && !result.left ? ' (Anda)' : ''} - ${roundPlayer ? roundPlayer.status === 'lost' ? 'Kalah' : 'Aktif' : player.ready ? 'Siap' : 'Belum siap'}`;
     list.append(item);
   }
   document.getElementById('roster').hidden = false;
-  document.getElementById('server').textContent = `Server ${result.state.serverId} - ${result.state.players.length}/4 pemain (minimum 2)`;
+  document.getElementById('server').textContent = `Server ${result.state.serverId} - ${result.state.players.length}/6 pemain (minimum 2)`;
   const game = result.state.phase === 'game';
   document.getElementById('game').hidden = !game;
   document.getElementById('lobby-help').hidden = game;
@@ -85,6 +87,7 @@ export function mountRegistration(document, {
       get('ready').disabled ||= own.ready;
       get('not-ready').disabled ||= !own.ready;
     }
+    if (game) renderRound(document, latest, confirmed, (card, choice) => run('playCard', { card, choice }));
   }
   try {
     get('endpoint').value = config.endpoint || storage.getItem('game100:endpoint') || '';
@@ -125,9 +128,11 @@ export function mountRegistration(document, {
     timer = timers.setTimeout(() => { timer = undefined; void run('sync'); }, delay);
     timer?.unref?.();
   }
-  async function run(action) {
+  async function run(action, move) {
     if (stopped) return;
     if (latest?.state.phase === 'game' && ['ready', 'not-ready', 'leave'].includes(action)) return;
+    if (action === 'playCard' && (!active || latest?.state.round?.status !== 'playing'
+        || latest.state.round.turnPlayerId !== latest.playerId)) return;
     if (busy) {
       if (action === 'sync') refreshRequested = true;
       return;
@@ -154,6 +159,9 @@ export function mountRegistration(document, {
       recovering = current.hasSession();
       const result = action === 'join' ? await current.join(get('name').value)
         : action === 'ready' || action === 'not-ready' ? await current.setReady(action === 'ready')
+          : action === 'playCard' ? await current.playCard(move.card, move.choice, {
+            gameId: latest.state.gameId, turnNumber: latest.state.round.turnNumber,
+          })
           : await current[action]();
       if (stopped || epoch !== generation || selection !== selected()) return;
       if (latest && result.state.serverId !== latest.state.serverId) {
@@ -170,8 +178,10 @@ export function mountRegistration(document, {
       renderRoster(document, result);
       get('status').textContent = action === 'initialize' ? 'Server dikonfirmasi. Anda belum terdaftar.'
         : result.left ? 'Keluar dikonfirmasi server.'
-          : result.state.phase === 'game' ? 'Permainan dimulai oleh server dan sesi dikonfirmasi. Ini placeholder tersinkron; aturan kartu belum tersedia.'
-            : 'Lobby tersinkron dan sesi dikonfirmasi. Permainan otomatis dimulai saat 2-4 pemain semuanya siap.';
+          : result.state.phase === 'game' ? result.state.round
+            ? 'Ronde tersinkron. Skor, giliran, dan hasil ditentukan server.'
+            : 'Game lama adalah placeholder. Gunakan spreadsheet baru untuk ronde kartu.'
+            : 'Lobby tersinkron dan sesi dikonfirmasi. Permainan otomatis dimulai saat 2-6 pemain semuanya siap.';
     } catch (error) {
       if (stopped || epoch !== generation || selection !== selected()) return;
       failures++;
@@ -179,7 +189,8 @@ export function mountRegistration(document, {
         recovering = false;
         error = storageError;
       }
-      if (error.code === 'GAME_STARTED' && recovering) {
+      if (['GAME_STARTED', 'GAME_CHANGED', 'STALE_TURN', 'NOT_YOUR_TURN', 'GAME_FINISHED',
+        'INVALID_MOVE', 'GAME_UPGRADE_REQUIRED', 'GAME_NOT_STARTED'].includes(error.code) && recovering) {
         failures = 0;
         refreshRequested = true;
       }

@@ -21,3 +21,6 @@ button:disabled { opacity: .6; cursor: wait; }
 #status[role="alert"] { color: #852525; background: #fff0ef; }
 #server, #game-id { overflow-wrap: anywhere; }
 li { padding: .4rem; overflow-wrap: anywhere; }
+.hand { display: flex; flex-wrap: wrap; gap: .75rem; padding: 0; list-style: none; }
+.hand li { display: flex; flex-direction: column; gap: .5rem; border: 1px solid #c5d5cb; border-radius: 8px; }
+#table-score { font-size: 1.5rem; font-weight: 750; }

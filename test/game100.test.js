@@ -50,11 +50,11 @@ test('join preserves caller state, exposes no secrets, and checks server identit
   }), deps), code('SERVER_CHANGED'));
 });
 
-test('capacity is four, duplicate names checked atomically, phase must be supported', () => {
+test('capacity is six, duplicate names checked atomically, phase must be supported', () => {
   let state = initial();
-  for (let i = 1; i <= 4; i++) state = join(state, `Player ${i}`, i).state;
-  assert.throws(() => join(state, 'Fifth', 5), code('SERVER_FULL'));
-  assert.throws(() => join(state, ' player 1 ', 5), code('NAME_TAKEN'));
+  for (let i = 1; i <= 6; i++) state = join(state, `Player ${i}`, i).state;
+  assert.throws(() => join(state, 'Seventh', 7), code('SERVER_FULL'));
+  assert.throws(() => join(state, ' player 1 ', 7), code('NAME_TAKEN'));
   assert.throws(() => join({ ...state, phase: 'game' }, 'A'), code('CORRUPT_STATE'));
 });
 
