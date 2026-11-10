@@ -195,6 +195,8 @@ test('automatic dead-hand chains preserve actor move and never eliminate final s
     assert.equal(round.turnNumber, 2);
     assert.equal(round.lastMove.playerId, 'a');
     assert.equal(round.lastMove.outcome, 'played');
+    assert.equal(round.discardPile.at(-1), 'KS');
+    assert.equal(publicRound(round, 'a').discardTop, 'KS');
     validateRound(round, players);
   }
   const { round, players } = fixture({
@@ -205,6 +207,37 @@ test('automatic dead-hand chains preserve actor move and never eliminate final s
   assert.equal(round.winnerId, 'c');
   assert.equal(round.hands[2].cards.length, 3);
   assert.equal(round.lastMove.outcome, 'bust');
+  assert.equal(round.discardPile.at(-1), 'AS');
+});
+
+test('dead-hand cards stay below the played top and recycle on the subsequent reshuffle', () => {
+  const { round, players } = fixture({
+    cards: [['KS', '2S', '3S'], ['2H', '3H', '4H'],
+      ['2D', '3D', '4D'], ['KH', '2C', '3C']], tableScore: 100,
+  });
+  const lastDraw = round.drawPile.pop();
+  round.discardPile.unshift(...round.drawPile);
+  round.drawPile = [lastDraw];
+  validateRound(round, players);
+
+  play(round, players, 'KS', 99);
+  assert.deepEqual(round.eliminatedIds, ['b', 'c']);
+  assert.equal(round.status, 'playing');
+  assert.equal(round.turnPlayerId, 'd');
+  assert.equal(round.drawPile.length, 0);
+  assert.equal(round.discardPile.at(-1), 'KS');
+  assert.equal(publicRound(round, 'd').discardTop, 'KS');
+  const eliminatedCards = ['2H', '3H', '4H', '2D', '3D', '4D'];
+  assert.ok(eliminatedCards.every(card => round.discardPile.includes(card)));
+  const recycled = [...round.discardPile];
+
+  play(round, players, 'KH', 99);
+  assert.deepEqual(round.discardPile, ['KH']);
+  assert.equal(publicRound(round, 'a').discardTop, 'KH');
+  assert.equal(round.lastMove.card, 'KH');
+  assert.equal(round.drawPile.length, recycled.length - 1);
+  assert.deepEqual(new Set([...round.drawPile, round.hands[3].cards.at(-1)]), new Set(recycled));
+  validateRound(round, players);
 });
 
 test('repeating actor with dead refill is eliminated, and refill king saves next player', () => {
@@ -350,6 +383,7 @@ test('strict state validation rejects malformed state without writes', () => {
     r => { r.lastMove.scoreBefore = 101; }, r => { r.lastMove.scoreAfter = 1; },
     r => { r.lastMove.outcome = 'bad'; }, r => { r.lastMove.choice = 1; },
     r => { [r.drawPile[0], r.discardPile[0]] = [r.discardPile[0], r.drawPile[0]]; },
+    r => { r.discardPile.push(r.drawPile.pop()); },
     r => { r.lastMove.scoreBefore = 1; },
     r => { r.lastMove.outcome = 'bust'; },
     r => { r.lastMove.card = '2S'; r.lastMove.choice = 2; r.lastMove.scoreBefore = 100; },

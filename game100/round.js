@@ -98,7 +98,7 @@ export function validateRound(round, participantIds) {
       && roundScore(move.scoreBefore) && move.scoreAfter === round.tableScore
       && ['played', 'bust'].includes(move.outcome));
     check(cardOptions(move.card, move.scoreBefore).includes(move.choice));
-    check(round.discardPile.includes(move.card));
+    check(round.discardPile.at(-1) === move.card);
     const computed = roundResult(move.card, move.choice, move.scoreBefore);
     if (move.outcome === 'bust') {
       check(computed > 100 && move.scoreAfter === move.scoreBefore
@@ -179,7 +179,7 @@ export function playRound(round, participantIds, command, now, random = Math.ran
   const hand = next.hands.find(item => item.playerId === command.playerId);
   const eliminate = target => {
     next.eliminatedIds.push(target.playerId);
-    next.discardPile.push(...target.cards);
+    next.discardPile.unshift(...target.cards);
     target.cards = [];
   };
   hand.cards.splice(hand.cards.indexOf(command.card), 1);
