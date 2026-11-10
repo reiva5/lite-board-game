@@ -28,7 +28,8 @@ export function validateResult(data, action) {
       || !Array.isArray(state.players) || state.players.length > 4
       || state.players.some(player => !validId(player.id) || typeof player.name !== 'string'
         || !player.name.trim() || player.name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(player.name)
-        || player.ready !== false || !Number.isSafeInteger(player.lastSeenAt) || player.lastSeenAt < 0)
+        || typeof player.ready !== 'boolean' || !Number.isSafeInteger(player.lastSeenAt) || player.lastSeenAt < 0
+        || (player.readyVersion !== undefined && (!Number.isSafeInteger(player.readyVersion) || player.readyVersion < 0)))
       || (action !== 'initialize' && (!validId(data.playerId) || data.left !== (action === 'leave')
         || (action !== 'leave' && !state.players.some(player => player.id === data.playerId))))) {
     throw new ClientError('INVALID_RESPONSE', 'Bentuk respons server tidak valid.');
@@ -37,7 +38,7 @@ export function validateResult(data, action) {
   return {
     state: {
       schemaVersion: 1, serverId: state.serverId, revision: state.revision, phase: state.phase,
-      players: state.players.map(({ id, name, ready, lastSeenAt }) => ({ id, name, ready, lastSeenAt })),
+      players: state.players.map(({ id, name, ready, lastSeenAt, readyVersion = 0 }) => ({ id, name, ready, lastSeenAt, readyVersion })),
     },
     ...(action === 'initialize' ? {} : { playerId: data.playerId, left: data.left }),
   };
@@ -86,6 +87,12 @@ export function createRegistrationClient({
   const spreadsheet = sheetId(spreadsheetUrl);
   const key = `game100:v1:${endpoint}:${spreadsheet}`;
   const canonicalUrl = `https://docs.google.com/spreadsheets/d/${spreadsheet}/edit`;
+  let tail = Promise.resolve();
+  const serial = operation => {
+    const result = tail.then(() => exclusive(operation));
+    tail = result.catch(() => {});
+    return result;
+  };
   function load() {
     let raw;
     try { raw = storage.getItem(key); } catch { throw new ClientError('STORAGE_ERROR', 'Penyimpanan browser tidak tersedia; sesi tidak dapat diamankan.'); }
@@ -96,12 +103,16 @@ export function createRegistrationClient({
         || (session.serverId !== undefined && !validId(session.serverId))
         || (session.playerId !== undefined && !validId(session.playerId))
         || (!session.pending && (!session.serverId || !session.playerId))
-        || (session.pending && (!['join', 'leave'].includes(session.pending.action)
+        || (session.readyVersion !== undefined && (!Number.isSafeInteger(session.readyVersion) || session.readyVersion < 0))
+        || (session.revision !== undefined && (!Number.isSafeInteger(session.revision) || session.revision < 0))
+        || (session.pending && (!['join', 'leave', 'setReady'].includes(session.pending.action)
           || !validId(session.pending.requestId)
           || session.pending.secret !== session.secret || session.pending.spreadsheetUrl !== canonicalUrl
           || (session.pending.action === 'join' && typeof session.pending.name !== 'string')
-          || (session.pending.action === 'leave' && (session.pending.serverId !== session.serverId
-            || session.pending.playerId !== session.playerId || !session.playerId))))) {
+          || (session.pending.action !== 'join' && (session.pending.serverId !== session.serverId
+            || session.pending.playerId !== session.playerId || !session.playerId))
+          || (session.pending.action === 'setReady' && (typeof session.pending.ready !== 'boolean'
+            || !Number.isSafeInteger(session.pending.readyVersion) || session.pending.readyVersion < 1))))) {
       throw new ClientError('STORAGE_ERROR', 'Struktur sesi browser tidak valid.');
     }
     return session;
@@ -111,32 +122,52 @@ export function createRegistrationClient({
       throw new ClientError('STORAGE_ERROR', 'Gagal menyimpan sesi browser. Pulihkan sesi sebelum mencoba perintah baru.');
     }
   }
+  function unchanged(session) {
+    const current = load();
+    return current?.secret === session.secret && current.serverId === session.serverId
+      && current.playerId === session.playerId && current.revision === session.revision
+      && current.pending?.requestId === session.pending?.requestId;
+  }
   async function execute(session, command) {
     let result;
     try {
       result = validateResult(await send(command), command.action);
+      if ((command.serverId && result.state.serverId !== command.serverId)
+          || (session.playerId && result.playerId !== session.playerId)) {
+        throw new ClientError('INVALID_RESPONSE', 'Identitas respons tidak cocok dengan sesi; perintah tetap tertunda.');
+      }
+      if (session.revision !== undefined && result.state.revision < session.revision) {
+        throw new ClientError('STALE_RESPONSE', 'Respons revisi lama diabaikan; ulangi sinkronisasi.');
+      }
     } catch (error) {
-      // These domain rejections guarantee that a join did not create a player.
-      if (command.action === 'join' && error instanceof ClientError
-          && ['INVALID_NAME', 'NAME_TAKEN', 'SERVER_FULL', 'NOT_INITIALIZED'].includes(error.code)) {
+      // Only definitive rejections invalidate identity; ambiguous writes stay pending.
+      if (error instanceof ClientError && ((command.action === 'join'
+          && ['INVALID_NAME', 'NAME_TAKEN', 'SERVER_FULL', 'NOT_INITIALIZED'].includes(error.code))
+          || ['SESSION_ENDED', 'INVALID_SESSION', 'SERVER_CHANGED'].includes(error.code))
+          && unchanged(session)) {
         try { storage.removeItem(key); } catch {
-          throw new ClientError('STORAGE_ERROR', 'Pendaftaran ditolak, tetapi data percobaan gagal dibersihkan.');
+          throw new ClientError('STORAGE_ERROR', 'Sesi ditolak, tetapi data browser gagal dibersihkan. Pulihkan sesi sebelum mendaftar lagi.');
         }
       }
       throw error;
     }
+    if (!unchanged(session)) {
+      throw new ClientError('STALE_RESPONSE', 'Sesi browser berubah; respons lama diabaikan.');
+    }
     if (command.action === 'leave') {
       try { storage.removeItem(key); } catch { throw new ClientError('STORAGE_ERROR', 'Keluar dikonfirmasi server, tetapi penyimpanan browser gagal dibersihkan. Ulangi pemulihan.'); }
     } else {
-      save({ secret: session.secret, serverId: result.state.serverId, playerId: result.playerId });
+      save({ secret: session.secret, serverId: result.state.serverId, playerId: result.playerId,
+        revision: result.state.revision,
+        readyVersion: result.state.players.find(player => player.id === result.playerId).readyVersion });
     }
     return result;
   }
   return {
-    initialize: () => exclusive(async () => validateResult(await send({
+    initialize: () => serial(async () => validateResult(await send({
       action: 'initialize', requestId: random(), spreadsheetUrl: canonicalUrl,
     }), 'initialize')),
-    join: name => exclusive(async () => {
+    join: name => serial(async () => {
       const current = load();
       if (current) throw new ClientError('SESSION_EXISTS', 'Pulihkan atau keluar dari sesi tersimpan sebelum bergabung lagi.');
       const session = { secret: random() };
@@ -144,7 +175,7 @@ export function createRegistrationClient({
       save(session);
       return execute(session, session.pending);
     }),
-    resume: () => exclusive(async () => {
+    resume: () => serial(async () => {
       const session = load();
       if (!session) throw new ClientError('NO_SESSION', 'Tidak ada sesi tersimpan untuk spreadsheet dan endpoint ini.');
       return execute(session, session.pending ?? {
@@ -152,7 +183,28 @@ export function createRegistrationClient({
         secret: session.secret, serverId: session.serverId, playerId: session.playerId,
       });
     }),
-    leave: () => exclusive(async () => {
+    sync: () => serial(async () => {
+      const session = load();
+      if (!session) throw new ClientError('NO_SESSION', 'Sesi telah berakhir. Silakan daftar lagi.');
+      return execute(session, session.pending ?? {
+        action: 'sync', requestId: random(), spreadsheetUrl: canonicalUrl,
+        secret: session.secret, serverId: session.serverId, playerId: session.playerId,
+      });
+    }),
+    setReady: ready => serial(async () => {
+      if (typeof ready !== 'boolean') throw new ClientError('INVALID_REQUEST', 'Ready harus boolean.');
+      const session = load();
+      if (!session) throw new ClientError('NO_SESSION', 'Tidak ada sesi tersimpan.');
+      if (session.pending) throw new ClientError('PENDING_COMMAND', 'Pulihkan perintah tertunda sebelum mengubah ready.');
+      session.pending = {
+        action: 'setReady', ready, readyVersion: (session.readyVersion ?? 0) + 1,
+        requestId: random(), spreadsheetUrl: canonicalUrl,
+        secret: session.secret, serverId: session.serverId, playerId: session.playerId,
+      };
+      save(session);
+      return execute(session, session.pending);
+    }),
+    leave: () => serial(async () => {
       const session = load();
       if (!session) throw new ClientError('NO_SESSION', 'Tidak ada sesi tersimpan.');
       if (session.pending) throw new ClientError('PENDING_COMMAND', 'Pulihkan perintah tertunda sebelum keluar.');

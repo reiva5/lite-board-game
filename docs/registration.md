@@ -1,15 +1,15 @@
-# Kartu 100: registrasi (layer 1)
+# Kartu 100: registrasi dan deployment
 
 Frontend yang dituju: **https://reiva5.github.io/lite-board-game/** dari `web/`
 di repo ini. Backend: satu **standalone Apps Script**, dijalankan sebagai akun
 Google khusus game. Pemain tidak login Google. Tidak memakai HTMLService,
 `google.script.run`, server Node produksi, atau repo hosting lain.
 
-Layer ini hanya inisialisasi, daftar unik, pulihkan sesi, keluar, dan konfirmasi
-roster. Minimum kelompok yang dituju 2, maksimum 4; registrasi pertama tentu boleh
-berisi satu pemain. Belum ada ready, heartbeat, timeout, polling, auto-start,
-layar permainan, atau aturan kartu. `ready: false` dan `lastSeenAt` dicadangkan
-untuk layer berikutnya; resume **tidak** mengubah timestamp.
+Kontrak dasar layer 1 mencakup inisialisasi, daftar unik, pulihkan sesi, keluar,
+dan roster. Layer 2 menambahkan ready, heartbeat, timeout dan polling; lihat
+[kontrak lobby](./lobby.md). Minimum kelompok yang dituju 2, maksimum 4;
+registrasi pertama boleh berisi satu pemain. Semua siap tetap di lobby:
+auto-start, layar permainan, dan aturan kartu belum tersedia.
 
 ## Status deployment: belum live
 
@@ -21,12 +21,11 @@ Prasyarat yang belum tersedia:
 
 - Endpoint Apps Script `/exec` milik akun game, otorisasi akun itu, dan
   spreadsheet disposable yang dibagikan sebagai Editor kepada akun tersebut.
-- Repo sudah diubah menjadi publik atas permintaan pengguna dan Pages telah
-  dikonfigurasi untuk GitHub Actions. Penolakan paket untuk repo privat
-  sebelumnya tidak lagi menjadi prasyarat. Halaman/workflow layer ini tetap
-  harus tersedia di `main` sebelum workflow deploy dapat menerbitkannya;
-  konfigurasi Pages saja tidak membuktikan situs sudah live. Preview lokal
-  tidak melakukan merge atau deploy.
+- Repo sekarang publik atas permintaan pengguna dan koordinator telah
+  mengaktifkan Pages dengan `build_type=workflow`; URL kanonis:
+  https://reiva5.github.io/lite-board-game/. Publikasi perubahan tetap menunggu
+  merge yang disetujui dan workflow pada `main`. Layer ini tidak melakukan
+  merge, mengubah pengaturan akun/hosting, atau memicu deployment produksi.
 
 Jangan menyatakan deployment berhasil hanya karena CI hijau atau curl berhasil.
 
@@ -42,9 +41,9 @@ dependency pengujian tambahan. Setiap file JavaScript non-test memiliki pengujia
 | --- | --- |
 | `src/index.js`, `src/spreadsheet.js`, `src/google-sheets.js` | `test/spreadsheet.test.js` menguji public exports, validasi, request/response, token provider, dan error. |
 | `src/state-store.js` | `test/state-store.test.js` menguji persistence, antrean, snapshot, dan kegagalan storage. |
-| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js` menguji aturan registrasi, validasi payload, lock, retry, dan reserved cell. |
+| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js` dan `test/lobby-domain.test.js` menguji registrasi/lobby, validasi payload, ready, heartbeat, timeout, lock, retry, dan reserved cell. |
 | `apps-script/entry.js` | `test/apps-script-entry.test.js` menguji binding setiap layanan Google, digest signed-byte, body kosong, dan output JSON; `test/game100.test.js` juga menjalankan artifact gabungan. |
-| `web/client.js`, `web/ui.js` | `test/registration-web.test.js` menguji transport, identitas, pemulihan, event UI, loading, dan kegagalan storage/Web Locks. |
+| `web/client.js`, `web/ui.js` | `test/registration-web.test.js` dan `test/lobby-client.test.js` menguji transport, identitas, pemulihan, ready, polling, event UI, loading, dan kegagalan storage/Web Locks. |
 | `web/app.js`, `web/config.js` | `test/registration-web.test.js` mengimpor entry point browser asli dengan fake browser globals dan menguji konfigurasi publik immutable serta startup gagal. |
 | `scripts/build-apps-script.js`, `scripts/check.js` | `test/tooling.test.js` menguji fungsi tooling pada fixture sementara, isi artifact, pemilihan file, dan propagasi error; subprocess menjalankan file CLI asli dari working directory lain untuk menguji entry point dan exit status. |
 
@@ -102,8 +101,8 @@ URL pengguna dan tidak menerima range/aksi spreadsheet generik.
 
 ## Menyiapkan GitHub Pages
 
-Di Settings > Pages > Build and
-deployment > Source: **GitHub Actions**. Izinkan environment `github-pages`
+Pages sudah dikonfigurasi untuk **GitHub Actions** oleh koordinator.
+Izinkan environment `github-pages`
 deploy dari `main`. Workflow `.github/workflows/pages.yml` berjalan hanya pada
 `main` atau manual dispatch dengan ref `main`, menjalankan syntax check + seluruh
 test sebelum upload **hanya `web/`** dan deploy artifact itu. Tidak ada source
@@ -150,9 +149,9 @@ UTF-16 code units.
 
 | action | Field tambahan | Hasil/perilaku |
 | --- | --- | --- |
-| `initialize` | Tidak ada | Membuat server hanya bila reserved A1 kosong/tab tidak ada. Jika sudah valid, tidak mengubah apa pun. `data` hanya berisi `state`; tidak mendaftarkan pemain. |
+| `initialize` | Tidak ada | Membuat server hanya bila reserved A1 kosong/tab tidak ada. Server valid tetap dipakai; layer 2 dapat membersihkan pemain expired. `data` hanya berisi `state`; tidak mendaftarkan pemain. |
 | `join` | `name`, `secret`; `serverId` opsional | Daftar unik + capacity check dalam lock yang sama. Mengembalikan state publik, `playerId`, `left:false`. Secret yang sama pada pemain aktif memulihkan identitas, tidak membuat duplikat. |
-| `resume` | `serverId`, `playerId`, `secret` | Verifikasi seluruh identitas; snapshot publik tanpa mutasi/timestamp update. |
+| `resume` | `serverId`, `playerId`, `secret` | Verifikasi identitas; layer 2 menjalankan cleanup sebelum heartbeat server-time dan snapshot. |
 | `leave` | `serverId`, `playerId`, `secret` | Hapus hanya pemain terautentikasi; data pemain lain tetap. Mengembalikan `left:true`. |
 
 `secret` adalah 32 byte random browser dalam 64 karakter hex kecil (256 bit);
@@ -165,14 +164,16 @@ Client public module: `web/client.js` mengekspor `createRegistrationClient`,
 `postCommand`, `validateResult`, `ClientError`, `endpointUrl`, `sheetId`,
 `randomHex`. `createRegistrationClient({ endpoint, spreadsheetUrl, storage,
 send?, random?, exclusive? })` mengembalikan `initialize()`, `join(name)`,
-`resume()`, `leave()`, `hasSession()`, `lockKey`. `send(command)` opsional
+`resume()`, `leave()`, `hasSession()`, `lockKey`, dan tambahan layer 2
+`sync()` serta `setReady(boolean)`. `send(command)` opsional
 mengembalikan data hasil, bukan envelope; default menggunakan `postCommand`.
 `exclusive(operation)` harus menyerialkan operasi antartab bila dipakai di
 browser; UI memasangnya dengan `navigator.locks.request`. Jangan memakai default
 tanpa lock untuk integrasi browser multi-tab.
 
 `mountRegistration` di `web/ui.js` memasang handler UI dan auto-resume saat refresh
-untuk endpoint + spreadsheet terakhir. Tidak ada polling. `renderRoster` memakai
+untuk endpoint + spreadsheet terakhir. Layer 2 memasang polling sequential
+setelah sesi dikonfirmasi; lihat [lobby](./lobby.md). `renderRoster` memakai
 `textContent` untuk nama, tidak memakai `innerHTML`.
 
 Form awal `entry-form` hanya berisi `spreadsheet`, `name`, dan submit `join`.
@@ -194,9 +195,9 @@ Reserved storage **`Game100State!A1`** (bukan `State!A1`):
 ```text
 schemaVersion: 1
 serverId: ID backend
-revision: integer aman nonnegatif, bertambah hanya saat join/leave
+revision: integer aman nonnegatif, bertambah saat state berubah
 phase: "lobby"
-players: [{id, name, nameKey, secretDigest, ready:false, lastSeenAt}]
+players: [{id, name, nameKey, secretDigest, ready:boolean, lastSeenAt, readyVersion}]
 retries: [{requestId, action, secretDigest, fingerprint, playerId}]
 ```
 
@@ -215,8 +216,9 @@ nilainya null untuk standalone web apps. Lock ini **script-wide**, sehingga serv
 berbeda ikut berebut lock; bukan kunci per spreadsheet. Editor manual dan project
 Apps Script penulis lain tidak mengikuti lock ini.
 
-Join/leave memiliki request ID dan fingerprint yang dideduplikasi dalam 32
-mutasi terakhir per server; metadata tidak tumbuh tanpa batas. Request ID sama
+Join/leave/setReady memiliki request ID dan fingerprint yang dideduplikasi dalam
+32 perintah membership/ready terakhir per server (heartbeat tidak mengeviksikan
+history); metadata tidak tumbuh tanpa batas. Request ID sama
 dengan body/credential berbeda ditolak. Hasil retry menyertakan **snapshot
 terbaru**, bukan replay roster lama. Join dengan secret pemain aktif yang sama
 tetap pulih setelah dedup history dieviksikan. Retry leave dipastikan idempotent
@@ -231,13 +233,13 @@ identitas. Respons hilang/timeout/provider error/invalid JSON mempertahankan
 pending command; gunakan **Pulihkan / ulangi sesi**, jangan membuat identitas baru.
 Setelah respons leave terkonfirmasi barulah record dihapus.
 
-Penolakan join yang pasti tanpa mutasi (`INVALID_NAME`, `NAME_TAKEN`,
+Penolakan join yang pasti tanpa membuat pemain (`INVALID_NAME`, `NAME_TAKEN`,
 `SERVER_FULL`, `NOT_INITIALIZED`) membersihkan pending agar nama/input bisa
 diperbaiki. Error lain mempertahankan record. Jangan membagikan secret atau
 menghapus data browser sewaktu masih terdaftar: tanpa secret identitas tidak dapat
-diklaim berdasarkan nama. Layer ini tidak punya reset/admin kick/expiry; sesi
-yang benar-benar kehilangan secret memerlukan penanganan manual pemilik
-spreadsheet setelah koordinasi, bukan impersonasi via nama.
+diklaim berdasarkan nama. Tidak ada reset/admin kick atau impersonasi via nama. Layer 2 dapat
+menghapus sesi lobby tanpa heartbeat 60 detik pada request valid berikutnya;
+setelah expiry pemain boleh mendaftar baru dengan nama yang sudah bebas.
 
 ### Batas keamanan dan operasional
 
@@ -327,7 +329,7 @@ bukan hanya curl atau localhost:
    JSON yang dapat dibaca frontend setelah redirect ContentService, bukan
    halaman login, response opaque, atau pesan CORS.
 2. Pastikan hanya `Game100State!A1` terisi; sentinel pada `State!A1` dan sel lain
-   tetap. Initialize lagi tidak mengubah state/revision.
+   tetap. Initialize lagi tanpa pemain expired tidak mengubah state/revision.
 3. Daftar nama di dua profil/perangkat terpisah; coba nama sama dengan variasi
    kapitalisasi/NFC/spasi, lalu isi sampai 4. Pemain kelima ditolak.
 4. Refresh mempertahankan playerId. Hilangkan respons join **setelah server
