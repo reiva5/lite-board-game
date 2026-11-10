@@ -2,8 +2,10 @@
 
 PR ini ditumpuk di atas registrasi, bukan `main`. Registrasi dan library
 `src/index.js` tetap tersedia. Layer ini menambahkan ready, heartbeat/snapshot,
-dan expiry lobby. **Semua siap tetap di lobby**; auto-start, game placeholder,
-dan aturan kartu tidak termasuk layer ini.
+dan expiry lobby. Pada layer 2, **semua siap tetap di lobby**. Layer 3 kini
+menambahkan [auto-start dan game placeholder](./game-entry.md); kontrak final
+di dokumen tersebut menggantikan batas fase lobby di bawah. Aturan kartu tetap
+tidak termasuk fitur ini.
 
 ## Kontrak backend tambahan
 
@@ -26,7 +28,8 @@ Counter tidak menggantikan kredensial atau requestId.
 Persisted player layer 1 yang belum memiliki `readyVersion` diterima sebagai
 versi 0. Penulisan berikutnya menambahkan counter bila diperlukan; tidak
 menghapus/menginisialisasi ulang server. Keys lain tetap ketat. SchemaVersion
-tetap 1; fase yang didukung saat ini tetap hanya `lobby`.
+tetap 1. Layer 2 hanya mendukung `lobby`; validator final layer 3 juga menerima
+`game` dengan metadata wajib yang dijelaskan pada handoff final.
 
 SetReady memakai fingerprint berisi nilai ready dan readyVersion serta
 identitas. Join/leave tetap kompatibel dengan fingerprint layer 1.
@@ -176,7 +179,7 @@ uji nyata yang tersedia pada implementasi ini. Validasi Google/CORS live
 tetap terblokir; ikuti smoke test registrasi lalu uji:
 
 1. Dua sampai empat profil browser: ready/not-ready terlihat lintas profil
-   setelah sync; semua siap tetap lobby pada layer ini.
+   setelah sync; pada layer 3 semua siap otomatis beralih ke game placeholder.
 2. Leave satu profil mempertahankan ready pemain lain. Join pengganti belum
    siap, tanpa mereset yang lain.
 3. Hentikan heartbeat satu profil 60 detik. Request profil lain menghapusnya

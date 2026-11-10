@@ -8,8 +8,9 @@ Google khusus game. Pemain tidak login Google. Tidak memakai HTMLService,
 Kontrak dasar layer 1 mencakup inisialisasi, daftar unik, pulihkan sesi, keluar,
 dan roster. Layer 2 menambahkan ready, heartbeat, timeout dan polling; lihat
 [kontrak lobby](./lobby.md). Minimum kelompok yang dituju 2, maksimum 4;
-registrasi pertama boleh berisi satu pemain. Semua siap tetap di lobby:
-auto-start, layar permainan, dan aturan kartu belum tersedia.
+registrasi pertama boleh berisi satu pemain. Layer 3 menambahkan
+[game entry](./game-entry.md): server otomatis memulai saat 2-4 pemain semuanya
+siap dan seluruh peserta melihat placeholder tersinkron. Aturan kartu belum tersedia.
 
 ## Status deployment: belum live
 
@@ -41,7 +42,7 @@ dependency pengujian tambahan. Setiap file JavaScript non-test memiliki pengujia
 | --- | --- |
 | `src/index.js`, `src/spreadsheet.js`, `src/google-sheets.js` | `test/spreadsheet.test.js` menguji public exports, validasi, request/response, token provider, dan error. |
 | `src/state-store.js` | `test/state-store.test.js` menguji persistence, antrean, snapshot, dan kegagalan storage. |
-| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js` dan `test/lobby-domain.test.js` menguji registrasi/lobby, validasi payload, ready, heartbeat, timeout, lock, retry, dan reserved cell. |
+| `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js`, `test/lobby-domain.test.js`, dan `test/game-entry.test.js` menguji registrasi/lobby, validasi payload, ready, heartbeat, timeout, lock, retry, reserved cell, start atomik, peserta game tetap, dan reconnect. |
 | `apps-script/entry.js` | `test/apps-script-entry.test.js` menguji binding setiap layanan Google, digest signed-byte, body kosong, dan output JSON; `test/game100.test.js` juga menjalankan artifact gabungan. |
 | `web/client.js`, `web/ui.js` | `test/registration-web.test.js` dan `test/lobby-client.test.js` menguji transport, identitas, pemulihan, ready, polling, event UI, loading, dan kegagalan storage/Web Locks. |
 | `web/app.js`, `web/config.js` | `test/registration-web.test.js` mengimpor entry point browser asli dengan fake browser globals dan menguji konfigurasi publik immutable serta startup gagal. |
@@ -196,10 +197,14 @@ Reserved storage **`Game100State!A1`** (bukan `State!A1`):
 schemaVersion: 1
 serverId: ID backend
 revision: integer aman nonnegatif, bertambah saat state berubah
-phase: "lobby"
+phase: "lobby" | "game"
 players: [{id, name, nameKey, secretDigest, ready:boolean, lastSeenAt, readyVersion}]
 retries: [{requestId, action, secretDigest, fingerprint, playerId}]
 ```
+
+Fase `game` wajib menambahkan `gameId`, `participantIds`, dan `startedAt`;
+ketiganya tidak boleh ada pada fase `lobby`. Lihat [kontrak final](./game-entry.md)
+untuk roster tetap, late join, retry, dan pemulihan sesi.
 
 Marker, versi, keys root/nested, tipe, normalisasi nama, keunikan, panjang
 array, identitas, dan batas payload divalidasi sebelum perubahan. Tidak menerima

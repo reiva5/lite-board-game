@@ -24,12 +24,20 @@ const validId = value => typeof value === 'string' && !/\s/.test(value) && /^[A-
 export function validateResult(data, action) {
   const state = data?.state;
   if (!state || state.schemaVersion !== 1 || !validId(state.serverId)
-      || !Number.isSafeInteger(state.revision) || state.revision < 0 || state.phase !== 'lobby'
+      || !Number.isSafeInteger(state.revision) || state.revision < 0 || !['lobby', 'game'].includes(state.phase)
       || !Array.isArray(state.players) || state.players.length > 4
-      || state.players.some(player => !validId(player.id) || typeof player.name !== 'string'
+      || state.players.some(player => !player || typeof player !== 'object'
+        || !validId(player.id) || typeof player.name !== 'string'
         || !player.name.trim() || player.name.length > 40 || /[\p{Cc}\p{Cf}]/u.test(player.name)
         || typeof player.ready !== 'boolean' || !Number.isSafeInteger(player.lastSeenAt) || player.lastSeenAt < 0
         || (player.readyVersion !== undefined && (!Number.isSafeInteger(player.readyVersion) || player.readyVersion < 0)))
+      || new Set(state.players.map(player => player.id)).size !== state.players.length
+      || (state.phase === 'game' ? (!validId(state.gameId)
+        || !Number.isSafeInteger(state.startedAt) || state.startedAt < 0
+        || state.players.length < 2 || !state.players.every(player => player.ready)
+        || !Array.isArray(state.participantIds) || state.participantIds.length !== state.players.length
+        || state.participantIds.some((value, index) => value !== state.players[index].id))
+        : ['gameId', 'participantIds', 'startedAt'].some(key => Object.hasOwn(state, key)))
       || (action !== 'initialize' && (!validId(data.playerId) || data.left !== (action === 'leave')
         || (action !== 'leave' && !state.players.some(player => player.id === data.playerId))))) {
     throw new ClientError('INVALID_RESPONSE', 'Bentuk respons server tidak valid.');
@@ -39,6 +47,9 @@ export function validateResult(data, action) {
     state: {
       schemaVersion: 1, serverId: state.serverId, revision: state.revision, phase: state.phase,
       players: state.players.map(({ id, name, ready, lastSeenAt, readyVersion = 0 }) => ({ id, name, ready, lastSeenAt, readyVersion })),
+      ...(state.phase === 'game' ? {
+        gameId: state.gameId, participantIds: [...state.participantIds], startedAt: state.startedAt,
+      } : {}),
     },
     ...(action === 'initialize' ? {} : { playerId: data.playerId, left: data.left }),
   };
@@ -140,6 +151,17 @@ export function createRegistrationClient({
         throw new ClientError('STALE_RESPONSE', 'Respons revisi lama diabaikan; ulangi sinkronisasi.');
       }
     } catch (error) {
+      if (error instanceof ClientError && error.code === 'GAME_STARTED' && unchanged(session)) {
+        if (session.playerId) {
+          // A terminal lobby command rejection is not an invalidated game identity.
+          const { pending, ...identity } = session;
+          save(identity);
+        } else if (command.action === 'join') {
+          try { storage.removeItem(key); } catch {
+            throw new ClientError('STORAGE_ERROR', 'Pendaftaran ditolak, tetapi perintah tertunda gagal dibersihkan.');
+          }
+        }
+      }
       // Only definitive rejections invalidate identity; ambiguous writes stay pending.
       if (error instanceof ClientError && ((command.action === 'join'
           && ['INVALID_NAME', 'NAME_TAKEN', 'SERVER_FULL', 'NOT_INITIALIZED'].includes(error.code))

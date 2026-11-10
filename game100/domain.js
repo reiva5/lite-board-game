@@ -37,13 +37,15 @@ const id = value => typeof value === 'string' && !/\s/.test(value) && /^[A-Za-z0
 const digest = value => typeof value === 'string' && value.length === 64 && /^[a-f0-9]{64}$/.test(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const stateKeys = ['schemaVersion', 'serverId', 'revision', 'phase', 'players', 'retries'];
+const gameKeys = ['gameId', 'participantIds', 'startedAt'];
 const playerKeys = ['id', 'name', 'nameKey', 'secretDigest', 'ready', 'lastSeenAt'];
 const retryKeys = ['requestId', 'action', 'secretDigest', 'fingerprint', 'playerId'];
 
 export function validateState(state) {
   const corrupt = () => { throw new GameError('CORRUPT_STATE', 'Game100State rusak atau versi tidak didukung; tidak ditimpa.'); };
-  if (!keys(state, stateKeys) || state.schemaVersion !== 1 || !id(state.serverId)
-      || !integer(state.revision) || state.phase !== 'lobby'
+  if (!keys(state, state?.phase === 'game' ? [...stateKeys, ...gameKeys] : stateKeys)
+      || state.schemaVersion !== 1 || !id(state.serverId)
+      || !integer(state.revision) || !['lobby', 'game'].includes(state.phase)
       || !Array.isArray(state.players) || state.players.length > 4
       || !Array.isArray(state.retries) || state.retries.length > MAX_RETRIES) corrupt();
   const names = new Set(), ids = new Set(), secrets = new Set(), requests = new Set();
@@ -58,6 +60,11 @@ export function validateState(state) {
         || names.has(player.nameKey) || ids.has(player.id) || secrets.has(player.secretDigest)) corrupt();
     names.add(player.nameKey); ids.add(player.id); secrets.add(player.secretDigest);
   }
+  if (state.phase === 'game' && (!id(state.gameId) || !integer(state.startedAt)
+      || state.players.length < 2 || !state.players.every(player => player.ready)
+      || !Array.isArray(state.participantIds)
+      || state.participantIds.length !== state.players.length
+      || state.participantIds.some((value, index) => value !== state.players[index].id))) corrupt();
   for (const retry of state.retries) {
     if (!keys(retry, retryKeys) || !id(retry.requestId) || !id(retry.playerId)
         || !['join', 'leave', 'setReady'].includes(retry.action) || !digest(retry.secretDigest)
@@ -83,6 +90,9 @@ export function publicState(state) {
     schemaVersion: state.schemaVersion, serverId: state.serverId,
     revision: state.revision, phase: state.phase,
     players: state.players.map(({ id, name, ready, lastSeenAt, readyVersion = 0 }) => ({ id, name, ready, lastSeenAt, readyVersion })),
+    ...(state.phase === 'game' ? {
+      gameId: state.gameId, participantIds: [...state.participantIds], startedAt: state.startedAt,
+    } : {}),
   };
 }
 
@@ -109,6 +119,14 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
   requireValue(integer(timestamp), 'INVALID_TIME', 'Waktu server tidak valid.');
   let changed = false;
   function finish(result, error) {
+    if (!error && state.phase === 'lobby' && state.players.length >= 2
+        && state.players.every(player => player.ready)) {
+      state.phase = 'game';
+      state.gameId = uuid();
+      state.participantIds = state.players.map(player => player.id);
+      state.startedAt = timestamp;
+      changed = true;
+    }
     if (changed) {
       requireValue(state.revision < Number.MAX_SAFE_INTEGER, 'REVISION_LIMIT', 'Batas revisi tercapai.');
       state.revision++;
@@ -117,7 +135,7 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
     return { state, changed, ...(error ? { error } : { result: { ...result, state: publicState(state) } }) };
   }
   function cleanup() {
-    // Future phases must opt in explicitly; lobby expiry never applies to a game.
+    // Frozen game participants never expire through lobby cleanup.
     if (state.phase !== 'lobby') return;
     const remaining = state.players.filter(player => timestamp - player.lastSeenAt < LOBBY_TIMEOUT);
     if (remaining.length === state.players.length) return;
@@ -157,6 +175,14 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
       requireValue(action === 'leave' || state.players.some(item => item.id === retry.playerId),
         'SESSION_ENDED', 'Sesi berakhir setelah 60 detik tanpa heartbeat. Silakan daftar lagi.');
       return finish({ playerId: retry.playerId, left: action === 'leave' });
+    }
+    if (state.phase === 'game') {
+      requireValue(player && (action === 'join' || action === 'resume' || action === 'sync'),
+        'GAME_STARTED', 'Permainan sudah dimulai; peserta tetap dapat memulihkan dan menyinkronkan sesi.');
+      if (action === 'join') {
+        requireValue(player.nameKey === normalized.nameKey, 'SESSION_EXISTS', 'Sesi ini sudah memakai nama lain.');
+      }
+      return finish({ playerId: player.id, left: false });
     }
     requireValue(!player || state.players.includes(player), 'SESSION_ENDED',
       'Sesi berakhir setelah 60 detik tanpa heartbeat. Silakan daftar lagi.');
