@@ -7,12 +7,17 @@ Google khusus game. Pemain tidak login Google. Tidak memakai HTMLService,
 
 Kontrak dasar layer 1 mencakup inisialisasi, daftar unik, pulihkan sesi, keluar,
 dan roster. Layer 2 menambahkan ready, heartbeat, timeout dan polling; lihat
-[kontrak lobby](./lobby.md). Minimum kelompok yang dituju 2, maksimum 4;
+[kontrak lobby](./lobby.md). Minimum kelompok yang dituju 2, maksimum 6;
 registrasi pertama boleh berisi satu pemain. Layer 3 menambahkan
-[game entry](./game-entry.md): server otomatis memulai saat 2-4 pemain semuanya
-siap dan seluruh peserta melihat placeholder tersinkron. Aturan kartu belum tersedia.
+[game entry](./game-entry.md): server otomatis memulai saat 2-6 pemain semuanya
+siap. Versi terkini menambahkan [gameplay satu ronde](./gameplay.md).
 
-## Status deployment: belum live
+## Status deployment
+
+Versi placeholder sebelumnya sudah berhasil diuji pada Pages dan backend Google
+asli. Perubahan gameplay ini belum di-deploy atau diuji terhadap deployment Google
+asli; hasil lokal bukan bukti deployment versi baru. Bagian prasyarat di bawah
+menjelaskan kebutuhan setiap instalasi, bukan permintaan kredensial dalam repo.
 
 Pengujian lokal menggunakan fake Google services, fake Fetch, fake DOM, dan VM
 yang menjalankan artifact Apps Script yang benar-benar dihasilkan dari source.
@@ -43,8 +48,10 @@ dependency pengujian tambahan. Setiap file JavaScript non-test memiliki pengujia
 | `src/index.js`, `src/spreadsheet.js`, `src/google-sheets.js` | `test/spreadsheet.test.js` menguji public exports, validasi, request/response, token provider, dan error. |
 | `src/state-store.js` | `test/state-store.test.js` menguji persistence, antrean, snapshot, dan kegagalan storage. |
 | `game100/domain.js`, `apps-script/runtime.js` | `test/game100.test.js`, `test/lobby-domain.test.js`, dan `test/game-entry.test.js` menguji registrasi/lobby, validasi payload, ready, heartbeat, timeout, lock, retry, reserved cell, start atomik, peserta game tetap, dan reconnect. |
+| `game100/round.js` | `test/round.test.js` dan `test/gameplay.test.js` menguji konservasi 52 kartu, pilihan efek, rotasi, eliminasi, reshuffle, pertandingan lengkap, terminal state dan privasi tangan. |
 | `apps-script/entry.js` | `test/apps-script-entry.test.js` menguji binding setiap layanan Google, digest signed-byte, body kosong, dan output JSON; `test/game100.test.js` juga menjalankan artifact gabungan. |
 | `web/client.js`, `web/ui.js` | `test/registration-web.test.js` dan `test/lobby-client.test.js` menguji transport, identitas, pemulihan, ready, polling, event UI, loading, dan kegagalan storage/Web Locks. |
+| `web/game.js` | `test/gameplay-web.test.js` menguji validasi snapshot ronde, renderer kartu/hasil, command gameplay, replay dan penolakan giliran lama. |
 | `web/app.js`, `web/config.js` | `test/registration-web.test.js` mengimpor entry point browser asli dengan fake browser globals dan menguji konfigurasi publik immutable serta startup gagal. |
 | `scripts/build-apps-script.js`, `scripts/check.js` | `test/tooling.test.js` menguji fungsi tooling pada fixture sementara, isi artifact, pemilihan file, dan propagasi error; subprocess menjalankan file CLI asli dari working directory lain untuk menguji entry point dan exit status. |
 
@@ -72,7 +79,7 @@ mengirim request.
    Gunakan satu project untuk seluruh server; jangan membuat deployment penulis
    terpisah yang tidak berbagi script lock.
 2. Jalankan `npm run build:apps-script` (Node 22+). Hasil
-   `dist/apps-script/Code.gs` menggabungkan `game100/domain.js`,
+   `dist/apps-script/Code.gs` menggabungkan `game100/round.js`, `game100/domain.js`,
    `apps-script/runtime.js`, dan `apps-script/entry.js`; tidak ada implementasi
    domain kedua. Salin seluruh `Code.gs` ke editor Apps Script dan
    `dist/apps-script/appsscript.json` ke manifest (aktifkan tampilan manifest di
