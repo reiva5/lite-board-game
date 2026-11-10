@@ -43,10 +43,11 @@ const retryKeys = ['requestId', 'action', 'secretDigest', 'fingerprint', 'player
 
 export function validateState(state) {
   const corrupt = () => { throw new GameError('CORRUPT_STATE', 'Game100State rusak atau versi tidak didukung; tidak ditimpa.'); };
-  if (!keys(state, state?.phase === 'game' ? [...stateKeys, ...gameKeys] : stateKeys)
+  if (!keys(state, state?.phase === 'game'
+    ? [...stateKeys, ...gameKeys, ...(state.round !== undefined ? ['round'] : [])] : stateKeys)
       || state.schemaVersion !== 1 || !id(state.serverId)
       || !integer(state.revision) || !['lobby', 'game'].includes(state.phase)
-      || !Array.isArray(state.players) || state.players.length > 4
+      || !Array.isArray(state.players) || state.players.length > 6
       || !Array.isArray(state.retries) || state.retries.length > MAX_RETRIES) corrupt();
   const names = new Set(), ids = new Set(), secrets = new Set(), requests = new Set();
   for (const player of state.players) {
@@ -65,9 +66,10 @@ export function validateState(state) {
       || !Array.isArray(state.participantIds)
       || state.participantIds.length !== state.players.length
       || state.participantIds.some((value, index) => value !== state.players[index].id))) corrupt();
+  if (state.round !== undefined) validateRound(state.round, state.participantIds);
   for (const retry of state.retries) {
     if (!keys(retry, retryKeys) || !id(retry.requestId) || !id(retry.playerId)
-        || !['join', 'leave', 'setReady'].includes(retry.action) || !digest(retry.secretDigest)
+        || !['join', 'leave', 'setReady', 'playCard'].includes(retry.action) || !digest(retry.secretDigest)
         || !digest(retry.fingerprint) || requests.has(retry.requestId)) corrupt();
     requests.add(retry.requestId);
     const active = state.players.find(player => player.id === retry.playerId);
@@ -85,29 +87,37 @@ export function decodeState(text) {
   return validateState(state);
 }
 
-export function publicState(state) {
+export function publicState(state, viewerId) {
   return {
     schemaVersion: state.schemaVersion, serverId: state.serverId,
     revision: state.revision, phase: state.phase,
     players: state.players.map(({ id, name, ready, lastSeenAt, readyVersion = 0 }) => ({ id, name, ready, lastSeenAt, readyVersion })),
     ...(state.phase === 'game' ? {
       gameId: state.gameId, participantIds: [...state.participantIds], startedAt: state.startedAt,
+      ...(state.round !== undefined ? { round: publicRound(state.round, viewerId) } : {}),
     } : {}),
   };
 }
 
 // Called only inside the runtime's script lock. Dependencies are synchronous.
-export function applyCommand(previous, command, { hash, uuid, now }) {
+export function applyCommand(previous, command, { hash, uuid, now, random = Math.random }) {
   requireValue(command && typeof command === 'object' && !Array.isArray(command), 'INVALID_REQUEST', 'Perintah tidak valid.');
   const { action, requestId } = command;
-  requireValue(['initialize', 'join', 'resume', 'leave', 'sync', 'setReady'].includes(action) && id(requestId),
+  requireValue(['initialize', 'join', 'resume', 'leave', 'sync', 'setReady', 'playCard'].includes(action) && id(requestId),
     'INVALID_REQUEST', 'Aksi atau requestId tidak valid.');
-  const allowed = ['action', 'requestId', 'spreadsheetUrl', 'secret', 'name', 'serverId', 'playerId', 'ready', 'readyVersion'];
+  const allowed = ['action', 'requestId', 'spreadsheetUrl', 'secret', 'name', 'serverId', 'playerId', 'ready', 'readyVersion',
+    'gameId', 'turnNumber', 'card', 'choice'];
   requireValue(Object.keys(command).every(key => allowed.includes(key)), 'INVALID_REQUEST', 'Field perintah tidak dikenal.');
   requireValue(action === 'setReady'
     ? typeof command.ready === 'boolean' && integer(command.readyVersion) && command.readyVersion > 0
     : command.ready === undefined && command.readyVersion === undefined,
   'INVALID_REQUEST', 'Ready harus boolean dengan versi keputusan positif.');
+  requireValue(action === 'playCard'
+    ? id(command.gameId) && integer(command.turnNumber)
+      && typeof command.card === 'string' && /^(A|[2-9]|10|J|Q|K)[SHDC]$/.test(command.card)
+      && Number.isSafeInteger(command.choice)
+    : ['gameId', 'turnNumber', 'card', 'choice'].every(key => command[key] === undefined),
+  'INVALID_REQUEST', 'Perintah kartu harus berisi gameId, nomor giliran, kartu, dan pilihan nilai.');
   let state = previous === null ? null : validateState(JSON.parse(JSON.stringify(previous)));
   if (action === 'initialize' && !state) {
     state = { schemaVersion: 1, serverId: uuid(), revision: 0, phase: 'lobby', players: [], retries: [] };
@@ -125,6 +135,7 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
       state.gameId = uuid();
       state.participantIds = state.players.map(player => player.id);
       state.startedAt = timestamp;
+      state.round = createRound(state.participantIds, random);
       changed = true;
     }
     if (changed) {
@@ -132,7 +143,7 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
       state.revision++;
     }
     validateState(state);
-    return { state, changed, ...(error ? { error } : { result: { ...result, state: publicState(state) } }) };
+    return { state, changed, ...(error ? { error } : { result: { ...result, state: publicState(state, result.playerId) } }) };
   }
   function cleanup() {
     // Frozen game participants never expire through lobby cleanup.
@@ -158,7 +169,8 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
   const secretDigest = hash(command.secret);
   const normalized = action === 'join' ? normalizeName(command.name) : null;
   const fingerprint = hash(JSON.stringify([action, normalized?.name ?? null, command.playerId ?? null,
-    command.serverId ?? null, ...(action === 'setReady' ? [command.ready, command.readyVersion] : [])]));
+    command.serverId ?? null, ...(action === 'setReady' ? [command.ready, command.readyVersion] : []),
+    ...(action === 'playCard' ? [command.gameId, command.turnNumber, command.card, command.choice] : [])]));
   const retry = state.retries.find(item => item.requestId === requestId);
   if (retry) {
     requireValue(retry.secretDigest === secretDigest && retry.fingerprint === fingerprint,
@@ -177,6 +189,17 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
       return finish({ playerId: retry.playerId, left: action === 'leave' });
     }
     if (state.phase === 'game') {
+      if (action === 'playCard') {
+        requireValue(command.gameId === state.gameId, 'GAME_CHANGED', 'Identitas permainan berubah; sinkronkan sesi.');
+        requireValue(state.round !== undefined, 'GAME_UPGRADE_REQUIRED',
+          'Game lama hanya placeholder. Gunakan spreadsheet baru untuk ronde kartu.');
+        const { playerId, card, choice, turnNumber } = command;
+        playRound(state.round, state.participantIds, { playerId, card, choice, turnNumber }, timestamp, random);
+        state.retries.push({ requestId, action, secretDigest, fingerprint, playerId: player.id });
+        state.retries = state.retries.slice(-MAX_RETRIES);
+        changed = true;
+        return finish({ playerId: player.id, left: false });
+      }
       requireValue(player && (action === 'join' || action === 'resume' || action === 'sync'),
         'GAME_STARTED', 'Permainan sudah dimulai; peserta tetap dapat memulihkan dan menyinkronkan sesi.');
       if (action === 'join') {
@@ -184,6 +207,7 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
       }
       return finish({ playerId: player.id, left: false });
     }
+    requireValue(action !== 'playCard', 'GAME_NOT_STARTED', 'Permainan kartu belum dimulai.');
     requireValue(!player || state.players.includes(player), 'SESSION_ENDED',
       'Sesi berakhir setelah 60 detik tanpa heartbeat. Silakan daftar lagi.');
     if (action === 'join') {
@@ -192,7 +216,7 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
         return finish({ playerId: player.id, left: false });
       }
       requireValue(!state.players.some(item => item.nameKey === normalized.nameKey), 'NAME_TAKEN', 'Nama sudah dipakai di server ini.');
-      requireValue(state.players.length < 4, 'SERVER_FULL', 'Server penuh (maksimal 4 pemain).');
+      requireValue(state.players.length < 6, 'SERVER_FULL', 'Server penuh (maksimal 6 pemain).');
       player = { id: uuid(), ...normalized, secretDigest, ready: false, readyVersion: 0, lastSeenAt: timestamp };
       state.players.push(player);
       changed = true;
@@ -224,3 +248,4 @@ export function applyCommand(previous, command, { hash, uuid, now }) {
     return finish(null, { code: error.code, message: error.message });
   }
 }
+import { createRound, validateRound, publicRound, playRound } from './round.js';

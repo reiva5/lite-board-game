@@ -344,7 +344,7 @@ test('roster never marks a departed identity as the current player', async () =>
   renderRoster(document, { ...result, left: true });
   assert.deepEqual(document.getElementById('players').children.map(item => item.textContent), ['A - Belum siap']);
   assert.equal(document.getElementById('roster').hidden, false);
-  assert.equal(document.getElementById('server').textContent, `Server ${result.state.serverId} - 1/4 pemain (minimum 2)`);
+  assert.equal(document.getElementById('server').textContent, `Server ${result.state.serverId} - 1/6 pemain (minimum 2)`);
 });
 
 test('UI reports unexpected DOM access failures during startup without resuming', async () => {
@@ -1010,7 +1010,7 @@ test('UI switches on focus/poll snapshot, inhibits lobby controls, restores game
   assert.match(get('game-id').textContent, /ID permainan:/);
   assert.deepEqual(get('participants').children.map(item => item.textContent), ['<A>', 'B']);
   assert.equal(get('lobby-help').hidden, true);
-  assert.match(get('status').textContent, /placeholder tersinkron/);
+  assert.match(get('status').textContent, /Ronde tersinkron/);
   for (const id of ['ready', 'not-ready', 'leave', 'join']) assert.equal(get(id).disabled, true);
   for (const id of ['ready', 'not-ready', 'leave', 'registration-fields', 'session-recovery']) assert.equal(get(id).hidden, true);
   assert.equal(get('name').required, false);
@@ -1025,6 +1025,7 @@ test('UI switches on focus/poll snapshot, inhibits lobby controls, restores game
   stale = { ...(await b.sync()), playerId: JSON.parse(f.storage.getItem(f.client.lockKey)).playerId };
   stale.state = { ...stale.state, revision: 0, phase: 'lobby' };
   delete stale.state.gameId; delete stale.state.participantIds; delete stale.state.startedAt;
+  delete stale.state.round;
   await ui.run('sync');
   assert.match(get('status').textContent, /STALE_RESPONSE/);
   assert.equal(get('game-id').textContent, gameId);
