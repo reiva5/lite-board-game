@@ -1,5 +1,11 @@
 # Kartu 100: game entry (layer 3, final)
 
+> Dokumen ini merekam kontrak **placeholder versi lama**. Implementasi terbaru
+> memakai [gameplay satu ronde](./gameplay.md), kapasitas 2-6 pemain dan objek
+> `round`. Game tersimpan tanpa `round` tetap mengikuti perilaku read-only
+> di bawah; game baru memperoleh kartu dan giliran. Audit coverage versi terbaru
+> mencakup 15 sumber produksi, termasuk `game100/round.js` dan `web/game.js`.
+
 PR ini ditumpuk langsung di atas branch lobby `reiva5-lobby-sync-kartu-100`,
 bukan `main` atau registration. Layer ini mengakhiri fitur pada **placeholder
 game tersinkron**, bukan game kartu yang dapat dimainkan. Tidak ada kartu,
