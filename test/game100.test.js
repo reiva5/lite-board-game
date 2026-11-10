@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { applyCommand, decodeState, normalizeName, spreadsheetId, MAX_PAYLOAD } from '../game100/domain.js';
 import { createHandler } from '../apps-script/runtime.js';
+import { cardOptions } from '../game100/round.js';
 
 const url = `https://docs.google.com/spreadsheets/d/${'s'.repeat(30)}/edit`;
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -274,7 +275,14 @@ test('corrupt reserved data/formula never overwrites cells; malformed and generi
 test('deployable build executes actual shared domain and runtime in Apps Script-shaped VM', async () => {
   const source = await readFile(new URL('../dist/apps-script/Code.gs', import.meta.url), 'utf8');
   const runtime = fakeRuntime();
+  let seed = 17;
+  const math = Object.create(Math);
+  math.random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
   const context = vm.createContext({
+    Math: math,
     LockService: { getScriptLock: runtime.services.getLock },
     SpreadsheetApp: { openById: runtime.services.open, flush: runtime.services.flush },
     Utilities: { getUuid: uuid, DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
@@ -308,6 +316,40 @@ test('deployable build executes actual shared domain and runtime in Apps Script-
   assert.equal(send(command('resume', auth)).data.state.gameId, game.data.state.gameId);
   assert.equal(send(command('leave', auth)).error.code, 'GAME_STARTED');
   assert.equal(send(command('join', { name: 'C', secret: secret(3) })).error.code, 'GAME_STARTED');
+  const identities = [auth, { serverId: b.state.serverId, playerId: b.playerId, secret: secret(2) }];
+  let snapshot = game.data.state, turns = 0;
+  while (snapshot.round.status === 'playing' && turns++ < 500) {
+    const actor = identities.find(identity => identity.playerId === snapshot.round.turnPlayerId);
+    const own = send(command('sync', actor)).data.state.round;
+    assert.equal(own.hand.length, 3);
+    assert.equal(own.hands, undefined);
+    assert.equal(own.drawPile, undefined);
+    const options = own.hand.flatMap(card => cardOptions(card, own.tableScore)
+      .map(choice => ({ card, choice, score: card.startsWith('K') ? 99 : own.tableScore + choice })));
+    const selected = options.sort((a, b) => b.score - a.score)[0];
+    const move = command('playCard', { ...actor, gameId: snapshot.gameId,
+      turnNumber: own.turnNumber, card: selected.card, choice: selected.choice });
+    const played = send(move);
+    assert.equal(played.ok, true);
+    assert.equal(played.data.state.round.turnNumber, own.turnNumber + 1);
+    assert.deepEqual(send(move), played);
+    snapshot = played.data.state;
+  }
+  assert.ok(turns < 500);
+  assert.equal(snapshot.round.status, 'finished');
+  assert.equal(snapshot.round.players.filter(player => player.status === 'active').length, 1);
+  for (const identity of identities) {
+    const own = send(command('resume', identity)).data.state.round;
+    assert.equal(own.winnerId, snapshot.round.winnerId);
+    assert.equal(own.hand.length, identity.playerId === own.winnerId ? 3 : 0);
+  }
+  const winner = identities.find(identity => identity.playerId === snapshot.round.winnerId);
+  const card = send(command('sync', winner)).data.state.round.hand[0];
+  const terminal = runtime.cells.get('Game100State!A1');
+  assert.equal(send(command('playCard', { ...winner, gameId: snapshot.gameId,
+    turnNumber: snapshot.round.turnNumber, card, choice: cardOptions(card, snapshot.round.tableScore)[0] }))
+    .error.code, 'GAME_FINISHED');
+  assert.equal(runtime.cells.get('Game100State!A1'), terminal);
 });
 
 test('script lock serializes ready/leave/heartbeat contention and exact retries', () => {
