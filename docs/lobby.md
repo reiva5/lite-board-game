@@ -1,5 +1,9 @@
 # Kartu 100: lobby (layer 2)
 
+> Kontrak historis lobby. Versi terkini mendukung 2-6 pemain dan
+> [gameplay satu ronde](./gameplay.md). Aturan timeout di sini hanya berlaku
+> sebelum start, bukan untuk mengeliminasi peserta ronde.
+
 PR ini ditumpuk di atas registrasi, bukan `main`. Registrasi dan library
 `src/index.js` tetap tersedia. Layer ini menambahkan ready, heartbeat/snapshot,
 dan expiry lobby. Pada layer 2, **semua siap tetap di lobby**. Layer 3 kini

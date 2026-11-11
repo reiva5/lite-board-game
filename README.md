@@ -127,7 +127,7 @@ file JavaScript ke suite pengujian ada di
 Integrasi dengan akun Google sungguhan memerlukan token dan spreadsheet uji
 sendiri; tidak disertakan atau diasumsikan tersedia.
 
-## Aplikasi Kartu 100 (registrasi, lobby, dan game entry)
+## Aplikasi Kartu 100 (satu ronde)
 
 Selain library yang API-nya tetap sama, repo ini menyediakan frontend statis
 `web/` untuk GitHub Pages dan backend standalone Google Apps Script di
@@ -135,10 +135,11 @@ Selain library yang API-nya tetap sama, repo ini menyediakan frontend statis
 sharing spreadsheet, build/deploy, kontrak API untuk layer lobby, batas keamanan,
 dan prasyarat smoke test live ada di
 [dokumentasi registrasi](https://github.com/reiva5/lite-board-game/blob/main/docs/registration.md).
-Deployment Google dan Pages **belum diverifikasi live**; lihat blocker di dokumen
-tersebut. [Dokumentasi lobby](./docs/lobby.md) menjelaskan ready/not-ready,
+Versi placeholder sebelumnya telah dicoba dengan backend Google dan Pages asli;
+versi gameplay ini memerlukan deployment baru dan belum diverifikasi live.
+[Dokumentasi lobby](./docs/lobby.md) menjelaskan ready/not-ready,
 heartbeat/sync sequential dan timeout lobby 60 detik.
-[Dokumentasi game entry](./docs/game-entry.md) menjelaskan auto-start atomik
-untuk 2-4 pemain yang semuanya siap, peserta tetap, dan placeholder game
-tersinkron yang dapat dipulihkan setelah refresh. Aturan kartu, pembagian,
-giliran, dan skor belum diimplementasikan.
+[Dokumentasi gameplay](./docs/gameplay.md) menjelaskan auto-start untuk 2-6
+pemain, dek 52 kartu, tangan privat 3 kartu, skor meja, giliran, eliminasi,
+reshuffle, dan pemenang terakhir yang aktif. Tidak ada skor lintas ronde/rematch.
+Game placeholder lama tetap read-only; gunakan spreadsheet baru untuk ronde baru.

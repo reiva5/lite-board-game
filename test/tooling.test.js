@@ -24,6 +24,7 @@ async function project(t) {
 async function buildProject(t) {
   const root = await project(t);
   await Promise.all([
+    writeFile(new URL('game100/round.js', root), 'export const roundMarker = "round";\n'),
     writeFile(new URL('game100/domain.js', root), 'export const marker = "domain";\r\n'),
     writeFile(new URL('apps-script/runtime.js', root),
       'import { marker } from "../game100/domain.js";\r\nexport const runtime = marker + ":runtime";\r\n'),
@@ -70,7 +71,7 @@ test('build concatenates shared sources in order, strips ESM, and copies the man
   assert.equal(output.href, new URL('dist/apps-script/', root).href);
   const source = await readFile(new URL('Code.gs', output), 'utf8');
   assert.equal(source,
-    'const marker = "domain";\r\n\nconst runtime = marker + ":runtime";\r\n\nfunction doPost() { return runtime; }\n');
+    'const roundMarker = "round";\n\nconst marker = "domain";\r\n\nconst runtime = marker + ":runtime";\r\n\nfunction doPost() { return runtime; }\n');
   assert.equal(vm.runInNewContext(source + '\ndoPost()'), 'domain:runtime');
   assert.equal(await readFile(new URL('appsscript.json', output), 'utf8'), manifest);
   await writeFile(new URL('Code.gs', output), 'obsolete artifact');

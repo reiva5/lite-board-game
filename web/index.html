@@ -10,8 +10,8 @@
 </head>
 <body>
   <main>
-    <header><p class="eyebrow">KARTU 100 / TAHAP 3</p><h1>Satu spreadsheet, satu server.</h1>
-      <p>Lobby untuk 2-4 pemain. Tidak perlu login Google untuk bermain.</p></header>
+    <header><p class="eyebrow">KARTU 100 / SATU RONDE</p><h1>Satu spreadsheet, satu server.</h1>
+      <p>Lobby untuk 2-6 pemain. Tidak perlu login Google untuk bermain.</p></header>
     <section aria-labelledby="entry-title">
       <h2 id="entry-title">Masuk server</h2>
       <form id="entry-form">
@@ -35,19 +35,29 @@
       <h2 id="roster-title">Pemain terdaftar</h2><p id="server"></p><ul id="players"></ul>
       <p id="lobby-help" class="hint">Sinkronisasi sekaligus heartbeat sekitar setiap 10 detik. Tanpa heartbeat selama 60 detik di lobby,
         pemain dikeluarkan dan semua pemain tersisa menjadi belum siap saat request berikutnya.
-        Tab latar belakang dapat ditunda browser. Permainan otomatis dimulai saat 2-4 pemain semuanya siap.</p>
+        Tab latar belakang dapat ditunda browser. Permainan otomatis dimulai saat 2-6 pemain semuanya siap.</p>
       <div class="actions">
         <button id="ready" type="button" hidden>Siap</button>
         <button id="not-ready" type="button" class="secondary" hidden>Belum siap</button>
         <button id="leave" type="button" class="secondary" hidden>Keluar server</button>
       </div>
       <section id="game" aria-labelledby="game-title" hidden>
-        <h2 id="game-title">Permainan dimulai - placeholder tersinkron</h2>
+        <h2 id="game-title">Kartu 100</h2>
         <p id="game-id"></p>
         <h3>Peserta tetap</h3><ul id="participants"></ul>
-        <p>Identitas permainan dan peserta telah dikunci oleh server. Aturan kartu, pembagian kartu,
-          giliran, dan skor belum tersedia. Refresh atau pulihkan sesi untuk kembali ke permainan yang sama.
-          Timeout lobby tidak menghapus peserta permainan.</p>
+        <p id="legacy-game">Game lama adalah placeholder tanpa kartu. Gunakan spreadsheet baru untuk
+          ronde kartu; data lama tidak di-reset otomatis.</p>
+        <div id="round" hidden>
+          <p id="table-score" role="status" aria-live="polite"></p>
+          <p id="turn" role="status" aria-live="polite"></p>
+          <p id="direction"></p><p id="draw-count"></p><p id="last-card"></p>
+          <p id="last-move"></p><p id="round-result"></p>
+          <h3>Kartu Anda</h3><ul id="hand" class="hand"></ul>
+          <p class="hint">A: +1/+11; 10: +10/-10; K: set 99; 9/J: netral;
+            Q: balik arah. Saat duel, J/Q memberi giliran lagi. Skor di atas 100
+            membuat pemain kalah. Tangan tanpa langkah legal dieliminasi otomatis.
+            Pemain terakhir yang aktif menang.</p>
+        </div>
       </section>
     </section>
     <details id="setup">

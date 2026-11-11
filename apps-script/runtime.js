@@ -1,4 +1,5 @@
 import { applyCommand, decodeState, spreadsheetId, GameError } from '../game100/domain.js';
+import { RoundError } from '../game100/round.js';
 
 export function createHandler(services) {
   return function handle(text) {
@@ -26,7 +27,7 @@ export function createHandler(services) {
         try { services.flush(); } finally { lock.releaseLock(); }
       }
     } catch (error) {
-      if (error instanceof GameError) return { ok: false, error: { code: error.code, message: error.message } };
+      if (error instanceof GameError || error instanceof RoundError) return { ok: false, error: { code: error.code, message: error.message } };
       // Provider exceptions may contain spreadsheet content or account identifiers.
       services.log('Game100 provider operation failed');
       return { ok: false, error: { code: 'PROVIDER_ERROR', message: 'Akses, quota, atau operasi Google gagal. Periksa izin akun game lalu ulangi perintah yang sama.' } };

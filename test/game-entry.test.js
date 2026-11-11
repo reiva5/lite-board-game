@@ -29,7 +29,7 @@ function fixture() {
     get state() { return state; }, get uuids() { return uuids; }, set time(value) { time = value; } };
 }
 
-for (const count of [2, 3, 4]) test(`${count} all-ready players start exactly once, with sanitized frozen metadata`, () => {
+for (const count of [2, 3, 4, 5, 6]) test(`${count} all-ready players start exactly once, with sanitized frozen metadata`, () => {
   const f = fixture(), players = Array.from({ length: count }, (_, i) => f.join(`P${i}`));
   for (const player of players.slice(0, -1)) f.apply(f.ready(player));
   assert.equal(f.state.phase, 'lobby');
@@ -40,7 +40,7 @@ for (const count of [2, 3, 4]) test(`${count} all-ready players start exactly on
   assert.equal(game.startedAt, 10);
   assert.deepEqual(game.participantIds, players.map(player => player.auth.playerId));
   assert.deepEqual(decodeState(JSON.stringify(game)), game);
-  assert.deepEqual(validateResult(outcome.result, 'setReady').state, publicState(game));
+  assert.deepEqual(validateResult(outcome.result, 'setReady').state, publicState(game, outcome.result.playerId));
   assert.ok(!JSON.stringify(outcome.result).includes('secret'));
   assert.ok(!JSON.stringify(outcome.result).includes('retries'));
   f.time = 600010;
